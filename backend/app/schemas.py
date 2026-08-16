@@ -28,6 +28,15 @@ class PedidoVaR(BaseModel):
     horizonte: int = Field(1, ge=1, le=60, description="Horizonte do VaR em pregoes")
     janela: int = Field(252, ge=30, le=1500, description="Janela movel do backtest")
     valor_carteira: float = Field(100_000.0, gt=0)
+    selic_anual: float | None = Field(
+        None,
+        gt=0,
+        lt=1,
+        description=(
+            "Taxa livre de risco anual usada apenas se a serie do BCB nao "
+            "estiver disponivel (ex.: 0.15 para 15% a.a.)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _valida(self) -> "PedidoVaR":

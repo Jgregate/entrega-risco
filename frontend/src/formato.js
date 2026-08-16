@@ -3,10 +3,15 @@ export const pct = (v, casas = 2) =>
     ? '—'
     : `${(v * 100).toFixed(casas).replace('.', ',')}%`
 
-export const brl = (v) =>
+export const brl = (v, casas = 0) =>
   v === null || v === undefined || Number.isNaN(v)
     ? '—'
-    : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 })
+    : v.toLocaleString('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: casas,
+        maximumFractionDigits: casas,
+      })
 
 export const num = (v, casas = 2) =>
   v === null || v === undefined || Number.isNaN(v)
@@ -19,6 +24,9 @@ export const dataCurta = (iso) => {
   return `${d}/${m}/${a}`
 }
 
+export const rotuloConfianca = (c) =>
+  `${(c * 100).toFixed(Number.isInteger(c * 100) ? 0 : 1).replace('.', ',')}%`
+
 export const CORES = {
   vermelhoClaro: '#ff4545',
   vermelhoMedio: '#ad2727',
@@ -28,4 +36,11 @@ export const CORES = {
   marrom: '#360100',
   branco: '#ffffff',
   quasePreto: '#130000',
+}
+
+// uma cor por método de VaR, usada de forma consistente em todos os gráficos
+export const COR_METODO = {
+  empirico: CORES.vermelhoClaro,
+  parametrico: CORES.branco,
+  ewma: CORES.vermelho,
 }

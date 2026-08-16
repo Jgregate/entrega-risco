@@ -1,20 +1,18 @@
 const BASE = import.meta.env.VITE_API_URL || ''
 
-export async function calcularVaREmpirico(pedido) {
-  const resp = await fetch(`${BASE}/api/var/empirico`, {
+async function post(rota, corpo) {
+  const resp = await fetch(`${BASE}${rota}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(pedido),
+    body: JSON.stringify(corpo),
   })
 
   if (!resp.ok) {
     let detalhe = `Erro ${resp.status}`
     try {
-      const corpo = await resp.json()
-      if (typeof corpo.detail === 'string') detalhe = corpo.detail
-      else if (Array.isArray(corpo.detail)) {
-        detalhe = corpo.detail.map((d) => d.msg).join(' · ')
-      }
+      const json = await resp.json()
+      if (typeof json.detail === 'string') detalhe = json.detail
+      else if (Array.isArray(json.detail)) detalhe = json.detail.map((d) => d.msg).join(' · ')
     } catch {
       /* resposta sem corpo JSON */
     }
@@ -22,3 +20,9 @@ export async function calcularVaREmpirico(pedido) {
   }
   return resp.json()
 }
+
+/** Payload completo: os três VaRs, o book e a relação risco-retorno. */
+export const analisar = (pedido) => post('/api/analise', pedido)
+
+/** Somente o VaR empírico — contrato antigo, mantido para integrações. */
+export const calcularVaREmpirico = (pedido) => post('/api/var/empirico', pedido)

@@ -1,23 +1,35 @@
-"""API do modulo de VaR Empirico - Celula de Risco, Inteli Finance."""
+"""API do modulo de risco — Celula de Risco, Inteli Finance.
+
+Tres VaRs (empirico, parametrico, EWMA) sobre a mesma carteira, backtest de
+violacoes para cada um e a relacao risco-retorno contra a Selic.
+"""
 
 from __future__ import annotations
 
 from datetime import date
 
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import risco_retorno as rr
+from .analise import analisar
 from .data import ErroDeDados, baixar_precos, buscar_nome
 from .schemas import PedidoVaR
+from .selic import ErroSelic, alinha_com_carteira, serie_selic, taxa_anual_para_diaria
+from .var_core import retorno_carteira, retornos_simples
 from .var_empirico import calcular
 
+SELIC_PADRAO_ANUAL = 0.15  # usada so se o BCB falhar e o pedido nao trouxer taxa
+
 app = FastAPI(
-    title="Risco | VaR Empirico",
+    title="Risco | VaR e risco-retorno",
     description=(
-        "Value at Risk por simulacao historica sobre precos do yfinance. "
-        "Modulo da celula de risco do Inteli Finance."
+        "VaR empirico, parametrico e EWMA sobre precos do yfinance, com "
+        "backtest de violacoes e indices de risco-retorno contra a Selic "
+        "(serie 11 do BCB). Modulo da celula de risco do Inteli Finance."
     ),
-    version="1.0.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -37,15 +49,16 @@ app.add_middleware(
 
 @app.get("/api/health", tags=["infra"])
 def health() -> dict:
-    return {"status": "ok", "modulo": "var-empirico", "data": date.today().isoformat()}
+    return {"status": "ok", "modulo": "risco", "data": date.today().isoformat()}
 
 
 @app.get("/api/ativo", tags=["dados"])
 def ativo(ticker: str = Query(..., min_length=1, max_length=20)) -> dict:
     """Valida um ticker no yfinance e devolve o nome do ativo."""
     ticker = ticker.strip().upper()
+    hoje = date.today()
     try:
-        precos = baixar_precos([ticker], inicio=str(date.today().replace(year=date.today().year - 1)))
+        precos = baixar_precos([ticker], inicio=str(hoje.replace(year=hoje.year - 1)))
     except ErroDeDados as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {
@@ -56,9 +69,7 @@ def ativo(ticker: str = Query(..., min_length=1, max_length=20)) -> dict:
     }
 
 
-@app.post("/api/var/empirico", tags=["var"])
-def var_empirico_endpoint(pedido: PedidoVaR) -> dict:
-    """Calcula o VaR empirico (simulacao historica) da carteira."""
+def _carrega_precos(pedido: PedidoVaR) -> pd.DataFrame:
     pesos = pedido.pesos_normalizados()
     try:
         precos = baixar_precos(
@@ -77,11 +88,64 @@ def var_empirico_endpoint(pedido: PedidoVaR) -> dict:
                 f"de {pedido.janela} dias. Amplie o periodo ou reduza a janela."
             ),
         )
+    return precos
 
+
+def _bloco_risco_retorno(pedido: PedidoVaR, precos: pd.DataFrame) -> dict:
+    """Sharpe/Sortino contra a Selic, com queda para taxa fixa se o BCB falhar."""
+    ret_carteira = retorno_carteira(retornos_simples(precos), pedido.pesos_normalizados())
+    inicio = ret_carteira.index[0].date()
+    fim = ret_carteira.index[-1].date()
+
+    fonte = "bcb-sgs-11"
+    observacao = "Selic diária, série 11 do Banco Central."
+    detalhe = None
+    try:
+        selic = alinha_com_carteira(serie_selic(inicio, fim), ret_carteira.index)
+    except ErroSelic as exc:
+        taxa = pedido.selic_anual or SELIC_PADRAO_ANUAL
+        selic = pd.Series(
+            taxa_anual_para_diaria(taxa), index=ret_carteira.index, name="selic"
+        )
+        fonte = "taxa-fixa"
+        observacao = f"BCB indisponível — taxa fixa de {taxa * 100:.2f}% a.a."
+        detalhe = str(exc)
+
+    saida = rr.calcular(ret_carteira, selic, janela_rolling=pedido.janela)
+    saida["fonte_taxa"] = fonte
+    saida["observacao_taxa"] = observacao
+    saida["detalhe_taxa"] = detalhe
+    return saida
+
+
+@app.post("/api/analise", tags=["analise"])
+def analise(pedido: PedidoVaR) -> dict:
+    """Payload completo: os tres VaRs, o book e a relacao risco-retorno."""
+    precos = _carrega_precos(pedido)
+    try:
+        return analisar(
+            precos=precos,
+            pesos=pedido.pesos_normalizados(),
+            confianca=pedido.confianca,
+            horizonte=pedido.horizonte,
+            janela=pedido.janela,
+            valor_carteira=pedido.valor_carteira,
+            risco_retorno=_bloco_risco_retorno(pedido, precos),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(status_code=500, detail=f"Falha no calculo: {exc}") from exc
+
+
+@app.post("/api/var/empirico", tags=["var"])
+def var_empirico_endpoint(pedido: PedidoVaR) -> dict:
+    """Somente o VaR empirico — mantido para quem ja consome este contrato."""
+    precos = _carrega_precos(pedido)
     try:
         saida = calcular(
             precos=precos,
-            pesos=pesos,
+            pesos=pedido.pesos_normalizados(),
             confianca=pedido.confianca,
             horizonte=pedido.horizonte,
             janela=pedido.janela,
@@ -89,6 +153,5 @@ def var_empirico_endpoint(pedido: PedidoVaR) -> dict:
         )
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Falha no calculo: {exc}") from exc
-
     saida["metodo"] = "empirico"
     return saida

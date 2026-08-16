@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { calcularVaREmpirico } from './api'
+import { analisar } from './api'
 import logo from './assets/logo.png'
-import PainelParametros from './components/PainelParametros'
-import Kpis from './components/Kpis'
+import AbaBook from './components/AbaBook'
+import AbaRiscoRetorno from './components/AbaRiscoRetorno'
+import GraficoComparacaoVaR from './components/GraficoComparacaoVaR'
 import GraficoDistribuicao from './components/GraficoDistribuicao'
-import GraficoBacktest from './components/GraficoBacktest'
-import Violacoes from './components/Violacoes'
 import GraficoEvolucao from './components/GraficoEvolucao'
-import { dataCurta } from './formato'
+import Kpis from './components/Kpis'
+import { Aderencia, ViolacoesPorAno } from './components/Violacoes'
+import { dataCurta, rotuloConfianca } from './formato'
 
 const hoje = new Date()
 const iso = (d) => d.toISOString().slice(0, 10)
@@ -31,17 +32,24 @@ const PADRAO = {
   valor_carteira: 100000,
 }
 
+const ABAS = [
+  { id: 'vars', titulo: 'VaRs', sub: 'empírico · paramétrico · EWMA' },
+  { id: 'risco', titulo: 'Risco e retorno', sub: 'Sharpe · Sortino' },
+  { id: 'book', titulo: 'Book', sub: 'carteira e parâmetros' },
+]
+
 export default function App() {
   const [params, setParams] = useState(PADRAO)
   const [dados, setDados] = useState(null)
   const [erro, setErro] = useState(null)
   const [carregando, setCarregando] = useState(false)
+  const [aba, setAba] = useState('book')
 
   const calcular = async () => {
     setCarregando(true)
     setErro(null)
     try {
-      const resposta = await calcularVaREmpirico({
+      const resposta = await analisar({
         posicoes: params.posicoes.map((p) => ({
           ticker: p.ticker.trim().toUpperCase(),
           peso: Number(p.peso),
@@ -54,6 +62,7 @@ export default function App() {
         valor_carteira: Number(params.valor_carteira),
       })
       setDados(resposta)
+      setAba('vars')
     } catch (e) {
       setErro(e.message)
       setDados(null)
@@ -62,6 +71,14 @@ export default function App() {
     }
   }
 
+  const semDados = (
+    <div className="vazio">
+      Nenhuma análise rodada ainda.
+      <br />
+      Monte a carteira na aba <strong>Book</strong> e clique em <strong>Rodar análise</strong>.
+    </div>
+  )
+
   return (
     <div className="app">
       <header className="topo">
@@ -69,58 +86,81 @@ export default function App() {
           <img className="selo" src={logo} alt="Inteli Finance" />
           <div>
             <div className="olho">Inteli Finance · Célula de Risco</div>
-            <h1>VaR Empírico</h1>
+            <h1>Painel de risco de carteira</h1>
           </div>
         </div>
-        <p className="subtitulo">
-          Value at Risk por simulação histórica: o risco lido direto da distribuição observada,
-          sem hipótese de normalidade. Dados de mercado via yfinance.
-        </p>
+        {dados && (
+          <p className="subtitulo">
+            {Object.keys(dados.parametros.pesos).join(' · ')}
+            <br />
+            {rotuloConfianca(dados.parametros.confianca)} · {dados.parametros.horizonte_dias}d ·
+            janela {dados.parametros.janela_backtest} · {dataCurta(dados.parametros.inicio)} a{' '}
+            {dataCurta(dados.parametros.fim)}
+          </p>
+        )}
       </header>
 
-      <div className="grade">
-        <PainelParametros
-          params={params}
-          setParams={setParams}
-          onCalcular={calcular}
-          carregando={carregando}
-        />
+      <nav className="abas">
+        {ABAS.map((a) => (
+          <button
+            key={a.id}
+            className={`aba${aba === a.id ? ' ativa' : ''}`}
+            onClick={() => setAba(a.id)}
+          >
+            <span className="aba-titulo">{a.titulo}</span>
+            <span className="aba-sub">{a.sub}</span>
+          </button>
+        ))}
+      </nav>
 
-        <main>
-          {erro && <div className="erro">{erro}</div>}
+      <main>
+        {erro && <div className="erro">{erro}</div>}
 
-          {!dados && !erro && (
-            <div className="vazio">
-              Monte a carteira ao lado e clique em <strong>Calcular VaR empírico</strong>.
-              <br />
-              O cálculo baixa os preços do yfinance — a primeira consulta leva alguns segundos.
-            </div>
-          )}
+        {aba === 'book' && (
+          <AbaBook
+            params={params}
+            setParams={setParams}
+            onCalcular={calcular}
+            carregando={carregando}
+            dados={dados}
+          />
+        )}
 
-          {dados && (
+        {aba === 'vars' &&
+          (dados ? (
             <>
               <Kpis dados={dados} />
+              <GraficoComparacaoVaR dados={dados} />
               <GraficoDistribuicao dados={dados} />
-              <GraficoBacktest dados={dados} />
-              <Violacoes dados={dados} />
+              <ViolacoesPorAno dados={dados} />
+              <Aderencia dados={dados} />
               <GraficoEvolucao dados={dados} />
-
-              <div className="rodape">
-                <span>
-                  Método: simulação histórica ·{' '}
-                  {Object.entries(dados.parametros.pesos)
-                    .map(([t, w]) => `${t} ${(w * 100).toFixed(0)}%`)
-                    .join(' · ')}
-                </span>
-                <span>
-                  {dados.parametros.pregoes} pregões · {dataCurta(dados.parametros.inicio)} a{' '}
-                  {dataCurta(dados.parametros.fim)} · fonte yfinance
-                </span>
-              </div>
             </>
-          )}
-        </main>
-      </div>
+          ) : (
+            semDados
+          ))}
+
+        {aba === 'risco' && (dados ? <AbaRiscoRetorno dados={dados} /> : semDados)}
+      </main>
+
+      {dados && (
+        <div className="rodape">
+          <span>
+            Preços: yfinance (fechamento ajustado) · taxa livre de risco:{' '}
+            {dados.risco_retorno?.fonte_taxa === 'bcb-sgs-11'
+              ? 'Selic diária, série 11 do BCB'
+              : 'taxa fixa (BCB indisponível)'}
+          </span>
+          <span>
+            {dados.parametros.pregoes} pregões · carteira de{' '}
+            {dados.parametros.valor_carteira.toLocaleString('pt-BR', {
+              style: 'currency',
+              currency: 'BRL',
+              maximumFractionDigits: 0,
+            })}
+          </span>
+        </div>
+      )}
     </div>
   )
 }

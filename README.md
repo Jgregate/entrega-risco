@@ -1,10 +1,15 @@
-# Risco · VaR Empírico
+# Risco · Painel de risco de carteira
 
-Módulo de **Value at Risk por simulação histórica** para carteiras, com dados de mercado do
-`yfinance`. Célula de Risco — Inteli Finance.
+Aplicação de risco de carteira com dados de mercado do `yfinance` e taxa livre de risco do
+Banco Central. Célula de Risco — Inteli Finance.
 
-Backend em **FastAPI/Python**, front em **React (Vite)**. O VaR paramétrico e o VaR EWMA são
-módulos irmãos e entram depois no mesmo contrato de API.
+Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em três abas:
+
+| Aba | O que traz |
+|---|---|
+| **VaRs** | Os três métodos lado a lado — empírico, paramétrico e EWMA — com as curvas no tempo, distribuição, histórico de violações, violações por ano, teste de aderência e evolução da carteira. |
+| **Risco e retorno** | Sharpe e Sortino contra a Selic, curva da carteira vs. Selic, índices móveis e drawdown. |
+| **Book** | Onde a carteira é montada e todos os parâmetros são manipulados: ativos, peso, valor nominal, período, confiança, horizonte, janela do backtest e valor total. |
 
 ---
 
@@ -59,9 +64,11 @@ cd backend
 # pytest                                # macOS / Linux com o venv ativo
 ```
 
-12 testes cobrem o núcleo de cálculo com dados sintéticos (sem rede): comparação do VaR com o
-quantil do numpy, convergência para o valor teórico da normal, efeito da diversificação,
-ausência de look-ahead no backtest e calibragem do teste de Kupiec.
+36 testes cobrem o núcleo de cálculo com dados sintéticos (sem rede): comparação do VaR com o
+quantil do numpy, convergência para o valor teórico da normal, equivalência entre empírico e
+paramétrico sob normalidade, divergência dos dois sob cauda gorda, reação do EWMA a choque de
+volatilidade, ausência de look-ahead nos três backtests, calibragem do Kupiec e as fórmulas de
+Sharpe, Sortino, downside e drawdown.
 
 ---
 
@@ -69,7 +76,11 @@ ausência de look-ahead no backtest e calibragem do teste de Kupiec.
 
 | Métrica | O que é |
 |---|---|
-| **VaR empírico** | Quantil `1 − c` da distribuição observada dos retornos da carteira. Nenhuma hipótese de distribuição. |
+| **VaR empírico** | Quantil `1 − c` da distribuição observada. Nenhuma hipótese de forma: não subestima cauda gorda, mas só enxerga o que já aconteceu. |
+| **VaR paramétrico** | Normal de média e desvio estimados: `VaR = −(μ + z·σ)`. Analítico e rápido; subestima a ponta quando há curtose. |
+| **VaR EWMA** | RiskMetrics, `σ²ₜ = λσ²ₜ₋₁ + (1−λ)r²ₜ₋₁` com λ = 0,94. Reage rápido a mudança de regime de volatilidade. |
+| **Sharpe / Sortino** | Retorno excedente à Selic por unidade de risco — total no Sharpe, só das quedas no Sortino. Anualizados por √252. |
+| **Drawdown** | Queda percentual sobre o topo anterior, com o máximo e a data do fundo. |
 | **Expected shortfall (CVaR)** | Perda média condicional a ter estourado o VaR. |
 | **Backtest rolling** | VaR recalculado a cada pregão com a janela móvel anterior, sem look-ahead. |
 | **Histórico de violações** | Dias em que a perda realizada furou o limite: contagem, taxa, agrupamento por ano, maior sequência consecutiva e os 10 maiores excessos. |
@@ -86,7 +97,18 @@ ausência de look-ahead no backtest e calibragem do teste de Kupiec.
 - **Horizonte > 1 dia**: o VaR é calculado direto sobre retornos acumulados de `h` dias em janelas
   sobrepostas, em vez de escalar por √h. Assim não se assume independência serial nem variância
   constante — coerente com a proposta do método empírico.
+- **Horizonte no paramétrico e no EWMA**: escala pela raiz do tempo, coerente com a hipótese
+  i.i.d. que os dois já assumem. Só o empírico usa retornos acumulados de verdade.
 - **Backtest**: sempre diário (h = 1), que é a convenção regulatória para contagem de exceções.
+  Os três métodos começam no mesmo pregão — sem isso a comparação de violações seria injusta.
+- **EWMA e a janela**: o EWMA não tem janela fixa (a memória decai exponencialmente); a janela
+  serve só para alinhar o início do backtest com os outros dois métodos.
+- **Valor nominal**: derivado do peso — `peso normalizado × valor da carteira`. Uma fonte de
+  verdade só, para peso e valor nunca se contradizerem.
+- **Taxa livre de risco**: Selic diária, série 11 do SGS do Banco Central
+  (`api.bcb.gov.br`, pública e sem chave), reindexada no calendário da bolsa com forward fill.
+  Se o SGS estiver fora do ar ou bloqueado pela rede, a aplicação cai para uma taxa anual fixa
+  (campo `selic_anual` do pedido, ou 15% a.a.) e sinaliza isso no payload e na interface.
 - **Preços**: fechamento **ajustado** (`auto_adjust=True`), apenas datas em que todos os ativos da
   carteira negociaram.
 
@@ -94,7 +116,7 @@ ausência de look-ahead no backtest e calibragem do teste de Kupiec.
 
 ## API
 
-`POST /api/var/empirico`
+`POST /api/analise` — payload completo das três abas
 
 ```json
 {
@@ -112,11 +134,21 @@ ausência de look-ahead no backtest e calibragem do teste de Kupiec.
 }
 ```
 
-A resposta traz `parametros`, `resultado`, `estatisticas`, `distribuicao`, `backtest`
-(`serie` + `resumo`) e `evolucao`.
+A resposta traz:
 
-Outros endpoints: `GET /api/health` e `GET /api/ativo?ticker=PETR4.SA` (valida o ticker e devolve
-nome e último preço).
+- `parametros` — o que foi efetivamente usado (datas reais, pregões, pesos normalizados);
+- `book` — uma linha por ativo com peso, **valor nominal**, preços inicial e final, quantidade
+  aproximada e retorno no período;
+- `metodos.{empirico,parametrico,ewma}` — VaR e ES em % e em reais, mais `backtest.serie`
+  (data, retorno, var, violação) e `backtest.resumo` (contagem, taxa, maior sequência, Kupiec);
+- `estatisticas`, `distribuicao`, `evolucao`;
+- `risco_retorno` — Sharpe, Sortino, retornos e Selic anualizados, drawdown, curvas acumuladas,
+  índices móveis e a origem da taxa (`fonte_taxa`).
+
+Campo opcional no pedido: `selic_anual` (ex.: `0.15`), usado só se o BCB estiver indisponível.
+
+Outros endpoints: `POST /api/var/empirico` (contrato antigo, só o empírico), `GET /api/health` e
+`GET /api/ativo?ticker=PETR4.SA`.
 
 ---
 
@@ -125,22 +157,41 @@ nome e último preço).
 ```
 backend/
   app/
-    main.py           endpoints FastAPI
-    schemas.py        validação de entrada (pydantic)
-    data.py           yfinance + cache de 15 min
-    var_empirico.py   núcleo de cálculo (puro, sem I/O)
+    main.py            endpoints FastAPI
+    schemas.py         validação de entrada (pydantic)
+    data.py            yfinance + cache de 15 min
+    selic.py           série 11 do BCB + fallback de taxa fixa
+    var_core.py        retornos, backtest, Kupiec, histograma  (compartilhado)
+    var_empirico.py    simulação histórica
+    var_parametrico.py normal
+    var_ewma.py        RiskMetrics
+    risco_retorno.py   Sharpe, Sortino, drawdown
+    analise.py         orquestra o payload das três abas
   tests/
 frontend/
   src/
-    App.jsx
-    api.js            cliente HTTP
-    formato.js        formatação pt-BR e paleta
-    styles.css        guia de estilos da liga
-    components/       painel, KPIs e gráficos
+    App.jsx            abas e estado da análise
+    api.js             cliente HTTP
+    formato.js         formatação pt-BR, paleta e cor de cada método
+    styles.css         guia de estilos da liga
+    components/        book, KPIs e gráficos
 ```
 
-O `var_empirico.py` não faz nenhuma chamada de rede: recebe um DataFrame de preços e devolve o
-payload. Isso mantém o cálculo testável e facilita plugar os outros VaRs no mesmo formato.
+### Contrato entre os métodos de VaR
+
+Os três módulos expõem exatamente a mesma interface, e é só isso que `analise.py` e o front
+conhecem:
+
+```python
+NOME, ROTULO, DESCRICAO                              # identificação
+pontual(retornos, confianca, horizonte) -> {"var", "es"}
+rolling(retornos, confianca, janela)    -> Backtest  # datas, retorno, var, violação
+```
+
+Trocar a implementação de qualquer um deles — pela versão oficial da célula, por um GARCH, pelo
+que for — não exige tocar em mais nada: os gráficos, o backtest e o teste de aderência continuam
+funcionando. Nenhum dos módulos faz chamada de rede; recebem uma Series de retornos e devolvem
+números, o que os mantém testáveis sem depender do yfinance.
 
 ---
 

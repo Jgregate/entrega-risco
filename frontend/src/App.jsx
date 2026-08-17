@@ -7,8 +7,10 @@ import GraficoComparacaoVaR from './components/GraficoComparacaoVaR'
 import GraficoDistribuicao from './components/GraficoDistribuicao'
 import GraficoEvolucao from './components/GraficoEvolucao'
 import Kpis from './components/Kpis'
+import SeletorJanela from './components/SeletorJanela'
 import { Aderencia, ViolacoesPorAno } from './components/Violacoes'
 import { dataCurta, rotuloConfianca } from './formato'
+import { dataDeCorte } from './janela'
 
 const hoje = new Date()
 const iso = (d) => d.toISOString().slice(0, 10)
@@ -44,6 +46,8 @@ export default function App() {
   const [erro, setErro] = useState(null)
   const [carregando, setCarregando] = useState(false)
   const [aba, setAba] = useState('book')
+  // janela de visualização da aba de VaRs (null = histórico completo)
+  const [janelaAnos, setJanelaAnos] = useState(null)
 
   const calcular = async () => {
     setCarregando(true)
@@ -62,6 +66,7 @@ export default function App() {
         valor_carteira: Number(params.valor_carteira),
       })
       setDados(resposta)
+      setJanelaAnos(null)
       setAba('vars')
     } catch (e) {
       setErro(e.message)
@@ -70,6 +75,17 @@ export default function App() {
       setCarregando(false)
     }
   }
+
+  const fim = dados?.parametros?.fim
+  const corte = dataDeCorte(fim, janelaAnos)
+  const anosDisponiveis = dados
+    ? Math.max(
+        1,
+        Math.floor(
+          (new Date(fim) - new Date(dados.parametros.inicio)) / (365.25 * 24 * 3600 * 1000)
+        )
+      )
+    : 0
 
   const semDados = (
     <div className="vazio">
@@ -130,11 +146,18 @@ export default function App() {
           (dados ? (
             <>
               <Kpis dados={dados} />
-              <GraficoComparacaoVaR dados={dados} />
-              <GraficoDistribuicao dados={dados} />
-              <ViolacoesPorAno dados={dados} />
+              <SeletorJanela
+                valor={janelaAnos}
+                onMudar={setJanelaAnos}
+                disponiveis={anosDisponiveis}
+                corte={corte}
+                fim={fim}
+              />
+              <GraficoComparacaoVaR dados={dados} corte={corte} />
+              <GraficoDistribuicao dados={dados} corte={corte} />
+              <ViolacoesPorAno dados={dados} corte={corte} />
               <Aderencia dados={dados} />
-              <GraficoEvolucao dados={dados} />
+              <GraficoEvolucao dados={dados} corte={corte} />
             </>
           ) : (
             semDados

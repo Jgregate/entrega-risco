@@ -270,6 +270,130 @@ select {
   margin: 0 0 12px;
 }
 
+/* ------------------- cartão de gráfico + lupa --------------------- */
+.cartao-grafico {
+  position: relative;
+  cursor: zoom-in;
+  transition: border-color 0.15s, transform 0.12s;
+}
+
+.cartao-grafico:hover,
+.cartao-grafico:focus-visible {
+  border-color: rgba(255, 69, 69, 0.45);
+  outline: none;
+}
+
+.cartao-grafico:hover .lupa,
+.cartao-grafico:focus-visible .lupa {
+  opacity: 1;
+}
+
+.lupa {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--vermelho-claro);
+  opacity: 0;
+  transition: opacity 0.15s;
+  pointer-events: none;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(3px);
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  animation: surgir 0.14s ease-out;
+}
+
+@keyframes surgir {
+  from {
+    opacity: 0;
+  }
+}
+
+.lightbox-caixa {
+  width: min(1500px, 96vw);
+  background: linear-gradient(180deg, rgba(19, 0, 0, 0.98) 0%, rgba(0, 0, 0, 0.98) 100%);
+  border: 1px solid var(--borda-forte);
+  border-radius: var(--raio);
+  padding: 22px 24px 16px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+  cursor: default;
+}
+
+.lightbox-topo {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.lightbox-topo h4 {
+  font-size: 17px;
+}
+
+.lightbox-topo .legenda-mini {
+  font-size: 12px;
+  margin-bottom: 10px;
+  max-width: 110ch;
+}
+
+.lightbox-corpo {
+  height: min(64vh, 640px);
+}
+
+.lightbox-dica {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--texto-fraco);
+  text-align: right;
+}
+
+.btn-fechar {
+  background: transparent;
+  border: 1px solid var(--borda-forte);
+  color: var(--texto-suave);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.btn-fechar:hover {
+  border-color: var(--vermelho-claro);
+  color: var(--vermelho-claro);
+}
+
+/* ------------------------- barra da janela ------------------------ */
+.barra-janela {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  background: linear-gradient(180deg, rgba(19, 0, 0, 0.92) 0%, rgba(0, 0, 0, 0.92) 100%);
+  border: 1px solid var(--borda);
+  border-left: 2px solid var(--vermelho-claro);
+  border-radius: var(--raio);
+  padding: 14px 18px;
+  margin-bottom: 4px;
+}
+
+.barra-janela .legenda-mini {
+  max-width: 78ch;
+}
+
 /* ---------------------------- segmentado -------------------------- */
 .segmentado {
   display: flex;

@@ -24,16 +24,20 @@ export default function Kpis({ dados }) {
         {ordem_metodos.map((nome) => {
           const m = metodos[nome]
           const resumo = m.backtest.resumo
+          // o paramétrico exibe a perda em reais como número principal;
+          // os outros dois seguem em percentual
+          const emReais = nome === 'parametrico'
           return (
             <div className="kpi" key={nome} style={{ borderTop: `2px solid ${COR_METODO[nome]}` }}>
               <span className="rotulo">
                 VaR {m.rotulo} · {conf} · {h}d
               </span>
               <div className="valor" style={{ color: COR_METODO[nome] }}>
-                {pct(m.var_percentual)}
+                {emReais ? brl(m.var_monetario) : pct(m.var_percentual)}
               </div>
               <div className="nota">
-                {brl(m.var_monetario)} · ES {pct(m.es_percentual)}
+                {emReais ? pct(m.var_percentual) : brl(m.var_monetario)} · ES{' '}
+                {emReais ? brl(m.es_monetario) : pct(m.es_percentual)}
                 <br />
                 {resumo.violacoes} violações vs. {num(resumo.violacoes_esperadas, 1)} esperadas
               </div>

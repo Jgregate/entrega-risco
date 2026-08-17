@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import {
   Area,
   AreaChart,
@@ -8,6 +9,8 @@ import {
   YAxis,
 } from 'recharts'
 import { CORES, brl, dataCurta } from '../formato'
+import { recortar } from '../janela'
+import CartaoGrafico from './CartaoGrafico'
 
 function Dica({ active, payload }) {
   if (!active || !payload?.length) return null
@@ -20,16 +23,27 @@ function Dica({ active, payload }) {
   )
 }
 
-export default function GraficoEvolucao({ dados }) {
+export default function GraficoEvolucao({ dados, corte }) {
+  // rebase: a janela começa valendo o valor da carteira, senão a curva
+  // apareceria partindo de um número arbitrário do meio do histórico
+  const serie = useMemo(() => {
+    const recorte = recortar(dados.evolucao, corte)
+    if (!recorte.length) return []
+    const fator = dados.parametros.valor_carteira / recorte[0].valor
+    return recorte.map((p) => ({ ...p, valor: p.valor * fator }))
+  }, [dados, corte])
+
   return (
-    <div className="cartao">
-      <h3>Evolução da carteira</h3>
-      <p className="legenda">
-        Valor acumulado da carteira com os pesos informados, rebalanceada diariamente, partindo de{' '}
-        {brl(dados.parametros.valor_carteira)}.
-      </p>
-      <ResponsiveContainer width="100%" height={210}>
-        <AreaChart data={dados.evolucao} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
+    <CartaoGrafico
+      titulo="Evolução da carteira"
+      altura={210}
+      subtitulo={`Valor acumulado da carteira com os pesos informados, rebalanceada diariamente, partindo de ${brl(
+        dados.parametros.valor_carteira
+      )}.`}
+    >
+      {(altura) => (
+      <ResponsiveContainer width="100%" height={altura}>
+        <AreaChart data={serie} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
           <defs>
             <linearGradient id="grad-carteira" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={CORES.vermelho} stopOpacity={0.55} />
@@ -64,6 +78,7 @@ export default function GraficoEvolucao({ dados }) {
           />
         </AreaChart>
       </ResponsiveContainer>
-    </div>
+      )}
+    </CartaoGrafico>
   )
 }

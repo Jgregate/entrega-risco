@@ -11,6 +11,8 @@ import {
   ZAxis,
 } from 'recharts'
 import { COR_METODO, CORES, dataCurta, num, pct, rotuloConfianca } from '../formato'
+import { recortar, resumoDoRecorte } from '../janela'
+import CartaoGrafico from './CartaoGrafico'
 
 function Dica({ active, payload }) {
   if (!active || !payload?.length) return null
@@ -29,66 +31,68 @@ function Dica({ active, payload }) {
   )
 }
 
-function PainelMetodo({ metodo, cor, dominio }) {
-  const serie = useMemo(
-    () =>
-      metodo.backtest.serie.map((d) => ({
-        ...d,
-        ponto: d.violacao ? d.retorno : null,
-      })),
-    [metodo]
-  )
-  const resumo = metodo.backtest.resumo
+function PainelMetodo({ metodo, cor, dominio, corte, esperado }) {
+  const { serie, resumo } = useMemo(() => {
+    const recorte = recortar(metodo.backtest.serie, corte)
+    return {
+      serie: recorte.map((d) => ({ ...d, ponto: d.violacao ? d.retorno : null })),
+      resumo: resumoDoRecorte(recorte),
+    }
+  }, [metodo, corte])
 
   return (
-    <div className="cartao">
-      <h4 style={{ color: cor }}>{metodo.rotulo}</h4>
-      <p className="legenda-mini">
-        {resumo.violacoes} violações · esperadas {num(resumo.violacoes_esperadas, 1)} ·{' '}
-        {metodo.descricao}
-      </p>
-      <ResponsiveContainer width="100%" height={250}>
-        <ComposedChart data={serie} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
-          <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-          <XAxis
-            dataKey="data"
-            stroke="rgba(255,255,255,0.35)"
-            tick={{ fontSize: 10 }}
-            tickLine={false}
-            minTickGap={42}
-            tickFormatter={(v) => v.slice(2, 7)}
-          />
-          <YAxis
-            domain={dominio}
-            stroke="rgba(255,255,255,0.35)"
-            tick={{ fontSize: 10 }}
-            tickLine={false}
-            axisLine={false}
-            tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
-          />
-          <Tooltip content={<Dica />} cursor={{ stroke: 'rgba(255,255,255,0.2)' }} />
-          <Line
-            type="monotone"
-            dataKey="retorno"
-            stroke="rgba(255,255,255,0.28)"
-            strokeWidth={0.8}
-            dot={false}
-            isAnimationActive={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="var"
-            stroke={cor}
-            strokeWidth={1.8}
-            dot={false}
-            isAnimationActive={false}
-          />
-          {/* ZAxis fixa o raio do ponto: sem isso o padrão do Recharts engole o gráfico */}
-          <ZAxis range={[9, 9]} />
-          <Scatter dataKey="ponto" fill={CORES.branco} shape="circle" isAnimationActive={false} />
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
+    <CartaoGrafico
+      titulo={metodo.rotulo}
+      cor={cor}
+      altura={250}
+      subtitulo={`${resumo.violacoes} violações em ${resumo.observacoes} pregões · taxa ${pct(
+        resumo.taxa
+      )} vs. ${pct(esperado, 1)} esperado · ${metodo.descricao}`}
+    >
+      {(altura) => (
+        <ResponsiveContainer width="100%" height={altura}>
+          <ComposedChart data={serie} margin={{ top: 6, right: 8, bottom: 0, left: -20 }}>
+            <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+            <XAxis
+              dataKey="data"
+              stroke="rgba(255,255,255,0.35)"
+              tick={{ fontSize: 10 }}
+              tickLine={false}
+              minTickGap={42}
+              tickFormatter={(v) => v.slice(2, 7)}
+            />
+            <YAxis
+              domain={dominio}
+              stroke="rgba(255,255,255,0.35)"
+              tick={{ fontSize: 10 }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
+            />
+            <Tooltip content={<Dica />} cursor={{ stroke: 'rgba(255,255,255,0.2)' }} />
+            <Line
+              type="monotone"
+              dataKey="retorno"
+              stroke="rgba(255,255,255,0.28)"
+              strokeWidth={0.8}
+              dot={false}
+              isAnimationActive={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="var"
+              stroke={cor}
+              strokeWidth={1.8}
+              dot={false}
+              isAnimationActive={false}
+            />
+            {/* ZAxis fixa o raio do ponto: sem isso o padrão do Recharts engole o gráfico */}
+            <ZAxis range={[9, 9]} />
+            <Scatter dataKey="ponto" fill={CORES.branco} shape="circle" isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+    </CartaoGrafico>
   )
 }
 
@@ -98,22 +102,23 @@ function PainelMetodo({ metodo, cor, dominio }) {
  * a volatilidade, o paramétrico acompanha de longe e o empírico anda em degraus
  * — cada degrau é uma perda grande entrando ou saindo da janela.
  */
-export default function GraficoComparacaoVaR({ dados }) {
+export default function GraficoComparacaoVaR({ dados, corte }) {
   const { metodos, ordem_metodos, parametros } = dados
+  const esperado = 1 - parametros.confianca
 
   // domínio único: sem isso cada gráfico se auto-escala e a comparação mente
   const dominio = useMemo(() => {
     let min = Infinity
     let max = -Infinity
     for (const nome of ordem_metodos) {
-      for (const d of metodos[nome].backtest.serie) {
+      for (const d of recortar(metodos[nome].backtest.serie, corte)) {
         min = Math.min(min, d.retorno, d.var)
         max = Math.max(max, d.retorno)
       }
     }
     const folga = (max - min) * 0.04
     return [min - folga, max + folga]
-  }, [metodos, ordem_metodos])
+  }, [metodos, ordem_metodos, corte])
 
   return (
     <section>
@@ -133,6 +138,8 @@ export default function GraficoComparacaoVaR({ dados }) {
             metodo={metodos[nome]}
             cor={COR_METODO[nome]}
             dominio={dominio}
+            corte={corte}
+            esperado={esperado}
           />
         ))}
       </div>

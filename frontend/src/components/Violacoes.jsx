@@ -3,6 +3,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -10,6 +11,8 @@ import {
   YAxis,
 } from 'recharts'
 import { COR_METODO, dataCurta, num, pct } from '../formato'
+import { recortar } from '../janela'
+import CartaoGrafico from './CartaoGrafico'
 
 function DicaAno({ active, payload, label }) {
   if (!active || !payload?.length) return null
@@ -18,102 +21,107 @@ function DicaAno({ active, payload, label }) {
     <div className="tooltip">
       <div className="t-data">{label}</div>
       <div>
-        <strong>{p.violacoes}</strong> violações em {p.pregoes} pregões
+        taxa observada <strong>{pct(p.taxa)}</strong>
       </div>
-      <div style={{ color: 'rgba(255,255,255,0.55)' }}>esperadas: {p.esperadas.toFixed(1)}</div>
+      <div style={{ color: 'rgba(255,255,255,0.55)' }}>
+        {p.violacoes} violações em {p.observacoes} observações
+      </div>
+      <div style={{ color: 'rgba(255,255,255,0.55)' }}>esperado: {pct(p.esperado)}</div>
     </div>
   )
 }
 
-function PainelAno({ metodo, cor, serie, dominioY, mediaEsperada }) {
-  const acimaDoEsperado = serie.filter((a) => a.violacoes > a.esperadas).length
+function PainelAno({ metodo, cor, serie, dominioY, esperado }) {
+  const acima = serie.filter((b) => b.taxa > b.esperado).length
 
   return (
-    <div className="cartao">
-      <h4 style={{ color: cor }}>{metodo.rotulo}</h4>
-      <p className="legenda-mini">
-        {acimaDoEsperado} de {serie.length} anos acima do esperado · total{' '}
-        {metodo.backtest.resumo.violacoes}
-      </p>
-      <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={serie} margin={{ top: 6, right: 8, bottom: 0, left: -26 }}>
-          <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-          <XAxis
-            dataKey="ano"
-            stroke="rgba(255,255,255,0.35)"
-            tick={{ fontSize: 10.5 }}
-            tickLine={false}
-          />
-          <YAxis
-            domain={dominioY}
-            stroke="rgba(255,255,255,0.35)"
-            tick={{ fontSize: 10.5 }}
-            tickLine={false}
-            axisLine={false}
-            allowDecimals={false}
-          />
-          <Tooltip content={<DicaAno />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
-          <ReferenceLine y={mediaEsperada} stroke="rgba(255,255,255,0.5)" strokeDasharray="4 4" />
-          <Bar
-            dataKey="violacoes"
-            fill={cor}
-            radius={[3, 3, 0, 0]}
-            maxBarSize={44}
-            isAnimationActive={false}
-          />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+    <CartaoGrafico
+      titulo={metodo.rotulo}
+      cor={cor}
+      altura={220}
+      subtitulo={`${acima} de ${serie.length} ano(s) acima do esperado · ${metodo.descricao}`}
+    >
+      {(altura) => (
+        <ResponsiveContainer width="100%" height={altura}>
+          <BarChart data={serie} margin={{ top: 6, right: 8, bottom: 0, left: -14 }}>
+            <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+            <XAxis
+              dataKey="ano"
+              stroke="rgba(255,255,255,0.35)"
+              tick={{ fontSize: 10.5 }}
+              tickLine={false}
+            />
+            <YAxis
+              domain={dominioY}
+              stroke="rgba(255,255,255,0.35)"
+              tick={{ fontSize: 10.5 }}
+              tickLine={false}
+              axisLine={false}
+              tickFormatter={(v) => `${(v * 100).toFixed(0)}%`}
+            />
+            <Tooltip content={<DicaAno />} cursor={{ fill: 'rgba(255,255,255,0.05)' }} />
+            <ReferenceLine y={esperado} stroke="rgba(255,255,255,0.55)" strokeDasharray="4 4" />
+            {/* com poucos anos na janela a barra fina fica perdida no eixo */}
+            <Bar
+              dataKey="taxa"
+              radius={[3, 3, 0, 0]}
+              maxBarSize={serie.length <= 3 ? 110 : 54}
+              isAnimationActive={false}
+            >
+              {serie.map((b, i) => (
+                <Cell key={i} fill={cor} fillOpacity={b.taxa > b.esperado ? 1 : 0.45} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </CartaoGrafico>
   )
 }
 
-export function ViolacoesPorAno({ dados }) {
+/**
+ * Violações em TAXA (violações ÷ observações do ano), não em contagem.
+ * Em taxa a linha do esperado é a mesma em qualquer ano — é o próprio
+ * 1 − confiança — então anos com número diferente de pregões continuam
+ * comparáveis entre si e entre métodos.
+ */
+export function ViolacoesPorAno({ dados, corte }) {
   const { metodos, ordem_metodos, parametros } = dados
-  const alpha = 1 - parametros.confianca
+  const esperado = 1 - parametros.confianca
 
-  // um array por método, com o mesmo eixo de anos
   const porMetodo = useMemo(() => {
-    const pregoesPorAno = new Map()
-    for (const d of metodos[ordem_metodos[0]].backtest.serie) {
-      const ano = d.data.slice(0, 4)
-      pregoesPorAno.set(ano, (pregoesPorAno.get(ano) || 0) + 1)
-    }
-    const anos = [...pregoesPorAno.keys()].sort()
-
     const saida = {}
     for (const nome of ordem_metodos) {
-      const contagem = new Map(anos.map((a) => [a, 0]))
-      for (const d of metodos[nome].backtest.serie) {
-        if (d.violacao) {
-          const ano = d.data.slice(0, 4)
-          contagem.set(ano, (contagem.get(ano) || 0) + 1)
-        }
+      const mapa = new Map()
+      for (const d of recortar(metodos[nome].backtest.serie, corte)) {
+        const ano = d.data.slice(0, 4)
+        const linha = mapa.get(ano) || { ano, observacoes: 0, violacoes: 0, esperado }
+        linha.observacoes += 1
+        if (d.violacao) linha.violacoes += 1
+        mapa.set(ano, linha)
       }
-      saida[nome] = anos.map((ano) => ({
-        ano,
-        violacoes: contagem.get(ano),
-        pregoes: pregoesPorAno.get(ano),
-        esperadas: pregoesPorAno.get(ano) * alpha,
-      }))
+      saida[nome] = [...mapa.values()]
+        .map((l) => ({ ...l, taxa: l.observacoes ? l.violacoes / l.observacoes : 0 }))
+        .sort((a, b) => a.ano.localeCompare(b.ano))
     }
     return saida
-  }, [metodos, ordem_metodos, alpha])
+  }, [metodos, ordem_metodos, corte, esperado])
 
-  const todas = ordem_metodos.flatMap((n) => porMetodo[n])
-  const dominioY = [0, Math.max(...todas.map((a) => a.violacoes)) + 1]
-  const mediaEsperada =
-    porMetodo[ordem_metodos[0]].reduce((s, a) => s + a.esperadas, 0) /
-    Math.max(porMetodo[ordem_metodos[0]].length, 1)
+  const maxTaxa = Math.max(
+    ...ordem_metodos.flatMap((n) => porMetodo[n].map((b) => b.taxa)),
+    esperado
+  )
+  const dominioY = [0, Math.ceil((maxTaxa * 1.12) / 0.01) * 0.01]
 
   return (
     <section>
       <div className="titulo-secao">
         <h3>Violações por ano</h3>
         <p className="legenda">
-          Barras acima da linha tracejada são anos em que o método furou mais que o previsto —
-          tipicamente estresse que a janela histórica ainda não tinha absorvido. A linha marca a
-          média anual esperada ({num(mediaEsperada, 1)} violações) e os três painéis dividem a
-          mesma escala.
+          Cada barra é a <strong>taxa de violações</strong> do ano — violações dividido pelo número
+          de observações do período — e não a contagem bruta. Em taxa a linha tracejada do esperado
+          ({pct(esperado, 1)}) vale para qualquer ano, então anos com mais ou menos pregões
+          continuam comparáveis. Barras cheias estão acima do esperado.
         </p>
       </div>
       <div className="trio">
@@ -124,7 +132,7 @@ export function ViolacoesPorAno({ dados }) {
             cor={COR_METODO[nome]}
             serie={porMetodo[nome]}
             dominioY={dominioY}
-            mediaEsperada={mediaEsperada}
+            esperado={esperado}
           />
         ))}
       </div>
@@ -148,9 +156,13 @@ export function Aderencia({ dados }) {
 
   return (
     <div className="cartao">
-      <h3>Aderência do modelo</h3>
+      <h3>
+        Aderência do modelo <span className="selo-teste ok">período completo</span>
+      </h3>
       <p className="legenda">
-        Teste de Kupiec (POF), cobertura incondicional. H₀: a taxa de violações é igual a{' '}
+        Teste de Kupiec (POF), cobertura incondicional, sobre todo o histórico — a janela dos
+        gráficos não se aplica aqui: com um ou dois anos de dados o teste perde poder e o
+        p-valor deixa de significar muita coisa. H₀: a taxa de violações é igual a{' '}
         {pct(alpha, 1)}. p-valor abaixo de 0,05 rejeita H₀ — o modelo está mal calibrado, seja por
         furar demais (subestima risco) ou de menos (capital parado à toa).
       </p>
@@ -205,7 +217,11 @@ export function Aderencia({ dados }) {
             key={nome}
             className={`chip${foco === nome ? ' ativo' : ''}`}
             onClick={() => setFoco(nome)}
-            style={foco === nome ? { borderColor: COR_METODO[nome], color: COR_METODO[nome] } : undefined}
+            style={
+              foco === nome
+                ? { borderColor: COR_METODO[nome], color: COR_METODO[nome] }
+                : undefined
+            }
           >
             {metodos[nome].rotulo}
           </button>

@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { CORES, brl, dataCurta, num, pct } from '../formato'
 import { Kpi } from './Kpis'
+import CartaoGrafico from './CartaoGrafico'
 
 function DicaCurvas({ active, payload }) {
   if (!active || !payload?.length) return null
@@ -42,12 +43,14 @@ function DicaIndice({ active, payload, campo, rotulo, cor }) {
 
 function PainelIndice({ dados, campo, rotulo, cor, nota, dominio, janela }) {
   return (
-    <div className="cartao">
-      <h4 style={{ color: cor }}>{rotulo} móvel</h4>
-      <p className="legenda-mini">
-        janela de {janela} pregões · {nota}
-      </p>
-      <ResponsiveContainer width="100%" height={240}>
+    <CartaoGrafico
+      titulo={`${rotulo} móvel`}
+      cor={cor}
+      altura={240}
+      subtitulo={`janela de ${janela} pregões · ${nota}`}
+    >
+      {(altura) => (
+      <ResponsiveContainer width="100%" height={altura}>
         <LineChart data={dados} margin={{ top: 6, right: 8, bottom: 0, left: -24 }}>
           <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
           <XAxis
@@ -81,7 +84,8 @@ function PainelIndice({ dados, campo, rotulo, cor, nota, dominio, janela }) {
           />
         </LineChart>
       </ResponsiveContainer>
-    </div>
+      )}
+    </CartaoGrafico>
   )
 }
 
@@ -163,13 +167,13 @@ export default function AbaRiscoRetorno({ dados }) {
         />
       </div>
 
-      <div className="cartao">
-        <h3>Carteira contra a Selic</h3>
-        <p className="legenda">
-          Retorno acumulado das duas pontas. A distância entre as curvas é o prêmio que o risco
-          pagou — e é exatamente esse excesso que entra no numerador do Sharpe e do Sortino.
-        </p>
-        <ResponsiveContainer width="100%" height={280}>
+      <CartaoGrafico
+        titulo="Carteira contra a Selic"
+        altura={280}
+        subtitulo="Retorno acumulado das duas pontas. A distância entre as curvas é o prêmio que o risco pagou — e é exatamente esse excesso que entra no numerador do Sharpe e do Sortino."
+      >
+        {(altura) => (
+        <ResponsiveContainer width="100%" height={altura}>
           <AreaChart data={rr.evolucao} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
             <defs>
               <linearGradient id="grad-carteira" x1="0" y1="0" x2="0" y2="1">
@@ -220,7 +224,8 @@ export default function AbaRiscoRetorno({ dados }) {
             />
           </AreaChart>
         </ResponsiveContainer>
-      </div>
+        )}
+      </CartaoGrafico>
 
       <section>
         <div className="titulo-secao">
@@ -254,15 +259,19 @@ export default function AbaRiscoRetorno({ dados }) {
         </div>
       </section>
 
-      <div className="cartao">
-        <h3>Drawdown</h3>
-        <p className="legenda">
-          Queda percentual em relação ao topo anterior. O fundo do gráfico é a pior sequência que
-          um cotista teria atravessado — pior drawdown de {pct(rr.max_drawdown)} sobre{' '}
-          {brl(dados.parametros.valor_carteira)}, ou{' '}
-          {brl(Math.abs(rr.max_drawdown * dados.parametros.valor_carteira))}.
-        </p>
-        <ResponsiveContainer width="100%" height={200}>
+      <CartaoGrafico
+        titulo="Drawdown"
+        altura={200}
+        subtitulo={
+          `Queda percentual em relação ao topo anterior. O fundo do gráfico é a pior sequência que um cotista teria atravessado — pior drawdown de ${pct(
+            rr.max_drawdown
+          )} sobre ${brl(dados.parametros.valor_carteira)}, ou ${brl(
+            Math.abs(rr.max_drawdown * dados.parametros.valor_carteira)
+          )}.`
+        }
+      >
+        {(altura) => (
+        <ResponsiveContainer width="100%" height={altura}>
           <AreaChart data={rr.evolucao} margin={{ top: 8, right: 12, bottom: 0, left: -12 }}>
             <defs>
               <linearGradient id="grad-dd" x1="0" y1="0" x2="0" y2="1">
@@ -297,7 +306,8 @@ export default function AbaRiscoRetorno({ dados }) {
             />
           </AreaChart>
         </ResponsiveContainer>
-      </div>
+        )}
+      </CartaoGrafico>
     </>
   )
 }

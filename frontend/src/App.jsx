@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { analisar } from './api'
 import logo from './assets/logo.png'
 import AbaBook from './components/AbaBook'
+import AbaFundos from './components/AbaFundos'
 import AbaRiscoRetorno from './components/AbaRiscoRetorno'
 import GraficoComparacaoVaR from './components/GraficoComparacaoVaR'
 import GraficoDistribuicao from './components/GraficoDistribuicao'
@@ -38,6 +39,7 @@ const ABAS = [
   { id: 'vars', titulo: 'VaRs', sub: 'empírico · paramétrico · EWMA' },
   { id: 'risco', titulo: 'Risco e retorno', sub: 'Sharpe · Sortino' },
   { id: 'book', titulo: 'Book', sub: 'carteira e parâmetros' },
+  { id: 'fundos', titulo: 'Fundos', sub: 'CVM · fundos de investimento' },
 ]
 
 export default function App() {
@@ -164,6 +166,8 @@ export default function App() {
           ))}
 
         {aba === 'risco' && (dados ? <AbaRiscoRetorno dados={dados} /> : semDados)}
+
+        {aba === 'fundos' && <AbaFundos />}
       </main>
 
       {dados && (

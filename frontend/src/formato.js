@@ -44,3 +44,11 @@ export const COR_METODO = {
   parametrico: CORES.branco,
   ewma: CORES.vermelho,
 }
+
+// mesma ideia, para as séries da aba Fundos (fundo em destaque, CDI como
+// referência neutra, índices de comparação em tons intermediários)
+export const COR_SERIE_FUNDO = {
+  fundo: CORES.vermelhoClaro,
+  cdi: CORES.branco,
+  ibovespa: CORES.vermelhoMedio,
+}

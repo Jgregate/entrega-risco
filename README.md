@@ -3,13 +3,14 @@
 Aplicação de risco de carteira com dados de mercado do `yfinance` e taxa livre de risco do
 Banco Central. Célula de Risco — Inteli Finance.
 
-Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em três abas:
+Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em quatro abas:
 
 | Aba | O que traz |
 |---|---|
 | **VaRs** | Os três métodos lado a lado — empírico, paramétrico e EWMA — com as curvas no tempo, distribuição, histórico de violações, violações por ano, teste de aderência e evolução da carteira. |
 | **Risco e retorno** | Sharpe e Sortino contra a Selic, curva da carteira vs. Selic, índices móveis e drawdown. |
 | **Book** | Onde a carteira é montada e todos os parâmetros são manipulados: ativos, peso, valor nominal, período, confiança, horizonte, janela do backtest e valor total. |
+| **Fundos** | Busca (ou Top 10 por retorno) entre fundos de investimento ativos na CVM, com crescimento acumulado vs. CDI, heatmap de retornos mensais, comparativo com Ibovespa e Sharpe/Sortino por janela. Integração do antigo sistema FUNDOS (Streamlit), reescrito nesta arquitetura — ver seção própria abaixo. |
 
 ---
 
@@ -152,6 +153,31 @@ Outros endpoints: `POST /api/var/empirico` (contrato antigo, só o empírico), `
 
 ---
 
+## Fundos
+
+Integração do sistema FUNDOS (originalmente um app Streamlit à parte) como uma aba nativa —
+mesmo backend, mesmo front, mesma identidade visual. Busca fundos ativos na CVM (dados abertos,
+`dados.cvm.gov.br/dados/FI`), calcula retorno/volatilidade/Sharpe/Sortino contra o CDI (série 12
+do SGS/BCB) e compara com Ibovespa (Yahoo Finance).
+
+| Endpoint | O que faz |
+|---|---|
+| `GET /api/fundos/buscar?q=` | Fundos ativos cujo nome contém `q`. |
+| `GET /api/fundos/top10?anos=1\|2\|3` | Top 10 por retorno acumulado, entre fundos com ≥ 100 cotistas e sem saltos mensais suspeitos (> 80% — proxy de desdobramento/erro de reporte, não performance real). |
+| `GET /api/fundos/analise?cnpj=&meses=` | Métricas por janela (6/12/24/36 meses), série mensal (fundo/CDI/Ibovespa) e resumo do período pedido. |
+| `POST /api/fundos/atualizar` | Força a próxima consulta a reprocessar o que pode ter mudado na CVM. |
+| `GET /api/fundos/status` | Data/hora do último download do mês mais recente. |
+
+**Cache**: os informes diários da CVM chegam em um ZIP por mês (todos os fundos juntos). Em vez
+de reparsear esse ZIP a cada consulta (como o Streamlit original fazia, num dict em memória que
+não sobrevive a restart), cada mês fechado é parseado **uma única vez** e persistido em
+`backend/data/fundos_cache.db` (SQLite, modo WAL para suportar as gravações concorrentes do
+`ThreadPoolExecutor` que baixa vários meses em paralelo). Meses antigos nunca mais são
+reprocessados; só o mês corrente e o anterior são revistos a cada 6h, porque são os únicos que a
+CVM ainda pode retificar.
+
+---
+
 ## Estrutura
 
 ```
@@ -167,14 +193,19 @@ backend/
     var_ewma.py        RiskMetrics
     risco_retorno.py   Sharpe, Sortino, drawdown
     analise.py         orquestra o payload das três abas
+    fundos/
+      cvm_data.py      registro, cotas mensais, CDI, Ibovespa (cache SQLite em backend/data/)
+      metrics.py       retorno, vol., Sharpe, Sortino de um fundo
+      router.py        endpoints /api/fundos/*
   tests/
 frontend/
   src/
     App.jsx            abas e estado da análise
     api.js             cliente HTTP
-    formato.js         formatação pt-BR, paleta e cor de cada método
+    formato.js         formatação pt-BR, paleta e cor de cada método/série
+    fundos.js          rótulo de mês e escala de cor do heatmap
     styles.css         guia de estilos da liga
-    components/        book, KPIs e gráficos
+    components/        book, KPIs, gráficos e a aba Fundos (AbaFundos.jsx)
 ```
 
 ### Contrato entre os métodos de VaR

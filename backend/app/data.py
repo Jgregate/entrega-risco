@@ -6,6 +6,11 @@ import time
 from typing import Sequence
 
 import pandas as pd
+
+from ._certs import ensure_ca_bundle
+
+ensure_ca_bundle()
+
 import yfinance as yf
 
 # cache simples em memoria: (chave) -> (timestamp, DataFrame)

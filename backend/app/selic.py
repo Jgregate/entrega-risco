@@ -17,7 +17,8 @@ import time
 from datetime import date
 
 import pandas as pd
-import requests
+
+from ._certs import sessao_requests
 
 URL_SGS = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.{serie}/dados"
 SERIE_SELIC_DIARIA = 11
@@ -46,7 +47,7 @@ def serie_selic(inicio: date, fim: date, usar_cache: bool = True) -> pd.Series:
         "dataFinal": fim.strftime("%d/%m/%Y"),
     }
     try:
-        resposta = requests.get(
+        resposta = sessao_requests().get(
             URL_SGS.format(serie=SERIE_SELIC_DIARIA),
             params=parametros,
             timeout=20,

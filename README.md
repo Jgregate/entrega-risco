@@ -1,7 +1,7 @@
 # Risco · Painel de risco de carteira
 
-Aplicação de risco de carteira com dados de mercado do `yfinance` e taxa livre de risco do
-Banco Central. Célula de Risco — Inteli Finance.
+Aplicação de risco de carteira com ações (preços do `yfinance`), títulos públicos (preços do
+Tesouro Transparente) e taxa livre de risco do Banco Central. Célula de Risco — Inteli Finance.
 
 Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em três abas:
 
@@ -9,24 +9,34 @@ Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em três ab
 |---|---|
 | **VaRs** | Os três métodos lado a lado — empírico, paramétrico e EWMA — com as curvas no tempo, distribuição, histórico de violações, violações por ano, teste de aderência e evolução da carteira. |
 | **Risco e retorno** | Sharpe e Sortino contra a Selic, curva da carteira vs. Selic, índices móveis e drawdown. |
-| **Book** | Onde a carteira é montada e todos os parâmetros são manipulados: ativos, peso, valor nominal, período, confiança, horizonte, janela do backtest e valor total. |
+| **Book** | Onde a carteira é montada e todos os parâmetros são manipulados. Um seletor **Ações \| Renda Fixa** escolhe a classe: em ações, ativos, peso e valor nominal; em renda fixa, títulos do Tesouro Direto com quantidade, data e PU de aquisição, e a marcação a mercado com P&L. Período, confiança, horizonte e janela do backtest valem para as duas. |
 
 ---
 
 ## Como rodar
 
-Precisa de **Python 3.10+** e **Node 18+**. Dois terminais.
+Precisa de **Python 3.10+** e **Node 18+**. São **dois terminais**, ambos abertos na raiz do
+repositório (`entrega-risco/`): um para o backend, outro para o frontend. Suba o backend primeiro.
 
-### 1. Backend
+Nenhuma dependência nova foi adicionada para a renda fixa — se o ambiente já estava instalado,
+basta subir os servidores (passo 3 de cada bloco).
+
+### 1. Backend — terminal 1
 
 **Windows (PowerShell)** — chamando o Python do venv direto, sem `activate`, que é onde
 a política de execução do PowerShell costuma atrapalhar:
 
 ```powershell
 cd backend
+
+# 1. só na primeira vez: cria o ambiente
 python -m venv .venv
+
+# 2. só na primeira vez (ou quando o requirements.txt mudar): instala as dependências
 .venv\Scripts\python.exe -m pip install --upgrade pip
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 3. sempre: sobe a API
 .venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
@@ -38,23 +48,64 @@ PowerShell bloquear o script, rode antes
 
 ```bash
 cd backend
-python3 -m venv .venv
+python3 -m venv .venv                 # só na primeira vez
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt       # só na primeira vez
 uvicorn app.main:app --reload
 ```
 
 API em `http://127.0.0.1:8000` · documentação interativa em `http://127.0.0.1:8000/docs`.
 
-### 2. Frontend
+O backend está no ar quando aparece `Application startup complete.` Para conferir de outro
+terminal:
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/health
+curl.exe http://127.0.0.1:8000/api/titulos-publicos/disponiveis
+```
+
+A **primeira** chamada de renda fixa baixa o histórico do Tesouro Direto (~14 MB) e leva de 5 a
+20 segundos. O resultado fica em cache por 12 horas, em memória e em `backend/.cache/` (ignorado
+pelo git), então as chamadas seguintes e os próximos `--reload` respondem na hora. Se o download
+falhar, a API serve o cache anterior em vez de cair.
+
+### 2. Frontend — terminal 2
 
 ```bash
 cd frontend
-npm install
-npm run dev
+npm install      # só na primeira vez (ou quando o package.json mudar)
+npm run dev      # sempre
 ```
 
-Aplicação em `http://localhost:5173`. O Vite já encaminha `/api` para o FastAPI.
+Aplicação em `http://localhost:5173`. O Vite encaminha `/api` para o FastAPI em
+`127.0.0.1:8000` — por isso o backend precisa estar de pé antes. Na aba **Book**, o seletor
+**Ações | Renda Fixa** escolhe sobre qual book a análise roda.
+
+### Parar os servidores
+
+`Ctrl+C` em cada terminal. Fechar a janela do terminal nem sempre encerra o processo do Python
+ou do Node no Windows — e aí a porta fica presa (veja abaixo).
+
+### Se o backend não sobe: porta 8000 ocupada
+
+Sintoma: `[WinError 10048] error while attempting to bind on address ('127.0.0.1', 8000)` ou
+`Address already in use`. Sobrou um uvicorn de uma execução anterior segurando a porta. No
+PowerShell, descubra quem é e encerre:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen | ForEach-Object { Get-Process -Id $_.OwningProcess }
+Stop-Process -Id <PID-que-apareceu-acima> -Force
+```
+
+macOS / Linux: `lsof -i :8000` e `kill <PID>`. O mesmo vale para o frontend na porta `5173` —
+com ela ocupada, o Vite sobe silenciosamente na `5174`, então confira o endereço que ele imprime.
+
+Outros tropeços comuns:
+
+- `No module named 'app'` — o uvicorn foi rodado fora da pasta `backend`. Rode `cd backend` antes.
+- `No module named uvicorn` (ou `fastapi`, `pandas`…) — o venv não foi criado ou as dependências
+  não foram instaladas. Refaça os passos 1 e 2 do backend.
+- `.venv\Scripts\python.exe não é reconhecido` — o venv não existe nesta pasta; rode o passo 1.
 
 ### Testes
 
@@ -64,11 +115,13 @@ cd backend
 # pytest                                # macOS / Linux com o venv ativo
 ```
 
-36 testes cobrem o núcleo de cálculo com dados sintéticos (sem rede): comparação do VaR com o
-quantil do numpy, convergência para o valor teórico da normal, equivalência entre empírico e
-paramétrico sob normalidade, divergência dos dois sob cauda gorda, reação do EWMA a choque de
-volatilidade, ausência de look-ahead nos três backtests, calibragem do Kupiec e as fórmulas de
-Sharpe, Sortino, downside e drawdown.
+143 testes, todos com dados sintéticos e **sem rede** — o download do Tesouro e o yfinance são
+sempre substituídos. Cobrem o núcleo de cálculo (comparação do VaR com o quantil do numpy,
+convergência para a normal teórica, empírico × paramétrico sob normalidade e sob cauda gorda,
+reação do EWMA a choque de volatilidade, ausência de look-ahead nos três backtests, calibragem
+do Kupiec, Sharpe, Sortino, downside e drawdown) e a renda fixa: parsing do CSV do Tesouro,
+cache e degradação, derivação do universo disponível, marcação a mercado e P&L, identidade das
+métricas com o motor de ações, avisos de amostra curta e as rotas da API.
 
 ---
 
@@ -112,6 +165,27 @@ Sharpe, Sortino, downside e drawdown.
 - **Preços**: fechamento **ajustado** (`auto_adjust=True`), apenas datas em que todos os ativos da
   carteira negociaram.
 
+### Renda fixa
+
+- **Fonte**: CSV público do Tesouro Transparente (`PrecoTaxaTesouroDireto.csv`), histórico desde
+  2002, em cache por 12 h com degradação para o cache anterior se o download falhar.
+- **Universo disponível**: papéis na última `Data Base` publicada e com vencimento depois de hoje.
+  Não há flag no arquivo — é derivado.
+- **Marcação a mercado**: pelo **`PU Venda Manha`**, o preço pelo qual o Tesouro recompra o papel.
+  `PU Compra Manha` é preço de emissão e não entra na marcação. A data-base é sempre o último dia
+  útil publicado (normalmente D-1) e aparece explícita na interface.
+- **PU de aquisição**: se não for informado, usa o PU de venda da data da compra (recuando para o
+  último dia publicado) e marca a linha como estimada.
+- **Métricas**: a série de PU de venda de cada título é uma série de preços e entra no **mesmo
+  motor** das ações — nenhum cálculo novo. Anualização em 252 dias úteis, como no resto do projeto.
+- **Pesos**: no book de renda fixa o dado primário é a quantidade; o peso sai do valor marcado a
+  mercado sobre o total marcado.
+- **Amostra curta**: título de emissão recente pode não cobrir a janela do backtest. Nesse caso o
+  Kupiec vem nulo e a resposta traz um aviso estruturado em `avisos`, em vez de um p-valor sem
+  significado.
+- **Taxa do Tesouro Selic**: no arquivo é o spread sobre a Selic, não rendimento absoluto — a
+  interface mostra `SELIC + x%`.
+
 ---
 
 ## API
@@ -150,6 +224,31 @@ Campo opcional no pedido: `selic_anual` (ex.: `0.15`), usado só se o BCB estive
 Outros endpoints: `POST /api/var/empirico` (contrato antigo, só o empírico), `GET /api/health` e
 `GET /api/ativo?ticker=PETR4.SA`.
 
+### Endpoints de renda fixa
+
+| Endpoint | O que faz |
+|---|---|
+| `GET /api/titulos-publicos/disponiveis` | Universo do último dia útil publicado: `id`, tipo, vencimento, taxa e PU de venda, mais a `data_base` e a procedência do cache. |
+| `POST /api/renda-fixa/marcacao` | Só a marcação a mercado: PU de aquisição e de marcação, valor marcado, P&L em R$ e %, data-base. |
+| `POST /api/analise/renda-fixa` | Mesmo contrato de `/api/analise`, mais `marcacao`, `por_titulo` (métricas de cada papel) e `avisos`. |
+| `POST /api/analise/consolidado` | Ações e renda fixa no mesmo book, ponderados por valor. Ainda sem entrada na interface. |
+
+```json
+{
+  "posicoes": [
+    { "titulo_id": "tesouro_ipca_2035-05-15", "quantidade": 10, "data_aquisicao": "2024-03-15" },
+    { "titulo_id": "tesouro_prefixado_2029-01-01", "quantidade": 5, "pu_aquisicao": 700.0 }
+  ],
+  "confianca": 0.95,
+  "horizonte": 1,
+  "janela": 252,
+  "inicio": "2022-01-01"
+}
+```
+
+O `titulo_id` vem de `/api/titulos-publicos/disponiveis` e segue o formato
+`{tipo}_{vencimento}`. `data_aquisicao` e `pu_aquisicao` são opcionais.
+
 ---
 
 ## Estrutura
@@ -167,14 +266,21 @@ backend/
     var_ewma.py        RiskMetrics
     risco_retorno.py   Sharpe, Sortino, drawdown
     analise.py         orquestra o payload das três abas
+    titulos_publicos.py  CSV do Tesouro: download, cache 12 h, parsing, universo disponível
+    renda_fixa.py      marcação a mercado, matriz de PUs, métricas por título, avisos, consolidado
+  .cache/              histórico do Tesouro em cache (gerado na primeira chamada, fora do git)
   tests/
 frontend/
   src/
-    App.jsx            abas e estado da análise
+    App.jsx            abas, classe de ativo e estado da análise
     api.js             cliente HTTP
     formato.js         formatação pt-BR, paleta e cor de cada método
     styles.css         guia de estilos da liga
     components/        book, KPIs e gráficos
+      AbaBook.jsx        seletor Ações | Renda Fixa
+      BookRendaFixa.jsx  seleção de títulos públicos
+      TabelaMarcacao.jsx marcação a mercado e P&L
+      ParametrosRisco.jsx parâmetros compartilhados pelas duas classes
 ```
 
 ### Contrato entre os métodos de VaR

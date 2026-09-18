@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { analisar } from './api'
+import { analisar, analisarConsolidado, analisarRendaFixa } from './api'
 import logo from './assets/logo.png'
 import AbaBook from './components/AbaBook'
 import AbaRiscoRetorno from './components/AbaRiscoRetorno'
@@ -9,7 +9,7 @@ import GraficoEvolucao from './components/GraficoEvolucao'
 import Kpis from './components/Kpis'
 import SeletorJanela from './components/SeletorJanela'
 import { Aderencia, ViolacoesPorAno } from './components/Violacoes'
-import { dataCurta, rotuloConfianca } from './formato'
+import { CORES, brl, dataCurta, rotuloConfianca } from './formato'
 import { dataDeCorte } from './janela'
 
 const hoje = new Date()
@@ -26,6 +26,7 @@ const PADRAO = {
     { ticker: 'VALE3.SA', peso: 35 },
     { ticker: 'ITUB4.SA', peso: 25 },
   ],
+  rendaFixa: [],
   inicio: iso(anosAtras(5)),
   fim: iso(hoje),
   confianca: 0.95,
@@ -34,11 +35,77 @@ const PADRAO = {
   valor_carteira: 100000,
 }
 
+const ROTULO_CLASSE = {
+  acoes: 'Renda Variável',
+  'renda-fixa': 'Renda Fixa',
+  consolidado: 'Ambos',
+}
+
 const ABAS = [
   { id: 'vars', titulo: 'VaRs', sub: 'empírico · paramétrico · EWMA' },
   { id: 'risco', titulo: 'Risco e retorno', sub: 'Sharpe · Sortino' },
   { id: 'book', titulo: 'Book', sub: 'carteira e parâmetros' },
 ]
+
+/**
+ * Diz, em cima dos gráficos, sobre qual book as métricas foram calculadas.
+ * Sem isso o painel de VaR de renda fixa é visualmente idêntico ao de ações.
+ */
+function FaixaClasse({ dados, classe }) {
+  const rf = classe === 'renda-fixa'
+  const consolidado = classe === 'consolidado'
+  const avisos = dados.avisos ?? []
+
+  return (
+    <div className="barra-janela">
+      <div>
+        <span className="rotulo" style={{ margin: 0 }}>
+          {consolidado
+            ? 'Métricas sobre a carteira consolidada'
+            : `Métricas sobre o book de ${ROTULO_CLASSE[classe]}`}
+        </span>
+        <p className="legenda-mini" style={{ margin: '5px 0 0' }}>
+          {consolidado ? (
+            <>
+              {brl(dados.composicao.valor_acoes)} em ações (
+              {(dados.composicao.peso_acoes * 100).toFixed(0)}%) e{' '}
+              {brl(dados.composicao.valor_renda_fixa)} em títulos (
+              {(dados.composicao.peso_renda_fixa * 100).toFixed(0)}%) ·{' '}
+              {brl(dados.composicao.valor_total)} no total · as duas pernas na mesma matriz de
+              retornos, ponderadas por valor de mercado, então a correlação entre elas entra no
+              VaR.
+            </>
+          ) : rf ? (
+            <>
+              {dados.marcacao.posicoes.length} título
+              {dados.marcacao.posicoes.length > 1 ? 's' : ''} do Tesouro Direto ·{' '}
+              {brl(dados.marcacao.totais.valor_marcado)} marcados pelo PU de venda de{' '}
+              {dataCurta(dados.marcacao.data_base)} · retornos da série de PU, ponderados por
+              valor de mercado.
+            </>
+          ) : (
+            <>
+              {dados.book.length} ativos · {brl(dados.parametros.valor_carteira)} · preços de
+              fechamento ajustado do yfinance, ponderados pelo peso informado.
+            </>
+          )}
+        </p>
+        {avisos.length > 0 && (
+          <ul className="avisos">
+            {avisos.map((a, i) => (
+              <li key={i} className={a.severidade === 'erro' ? 'perda' : 'destaque-suave'}>
+                {a.mensagem}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <span className="chip ativo" style={{ borderColor: CORES.vermelhoClaro }}>
+        {ROTULO_CLASSE[classe]}
+      </span>
+    </div>
+  )
+}
 
 export default function App() {
   const [params, setParams] = useState(PADRAO)
@@ -46,25 +113,40 @@ export default function App() {
   const [erro, setErro] = useState(null)
   const [carregando, setCarregando] = useState(false)
   const [aba, setAba] = useState('book')
+  const [classe, setClasse] = useState('acoes')
   // janela de visualização da aba de VaRs (null = histórico completo)
   const [janelaAnos, setJanelaAnos] = useState(null)
 
   const calcular = async () => {
     setCarregando(true)
     setErro(null)
+    const risco = {
+      inicio: params.inicio,
+      fim: params.fim,
+      confianca: params.confianca,
+      horizonte: Number(params.horizonte),
+      janela: Number(params.janela),
+    }
     try {
-      const resposta = await analisar({
-        posicoes: params.posicoes.map((p) => ({
-          ticker: p.ticker.trim().toUpperCase(),
-          peso: Number(p.peso),
-        })),
-        inicio: params.inicio,
-        fim: params.fim,
-        confianca: params.confianca,
-        horizonte: Number(params.horizonte),
-        janela: Number(params.janela),
-        valor_carteira: Number(params.valor_carteira),
-      })
+      const acoes = params.posicoes.map((p) => ({
+        ticker: p.ticker.trim().toUpperCase(),
+        peso: Number(p.peso),
+      }))
+      const resposta =
+        classe === 'acoes'
+          ? await analisar({
+              ...risco,
+              posicoes: acoes,
+              valor_carteira: Number(params.valor_carteira),
+            })
+          : classe === 'renda-fixa'
+            ? await analisarRendaFixa({ ...risco, posicoes: params.rendaFixa })
+            : await analisarConsolidado({
+                ...risco,
+                acoes,
+                renda_fixa: params.rendaFixa,
+                valor_carteira: Number(params.valor_carteira),
+              })
       setDados(resposta)
       setJanelaAnos(null)
       setAba('vars')
@@ -75,6 +157,9 @@ export default function App() {
       setCarregando(false)
     }
   }
+
+  // a resposta de ações não traz `classe`; a de renda fixa traz
+  const classeDosDados = dados?.classe ?? 'acoes'
 
   const fim = dados?.parametros?.fim
   const corte = dataDeCorte(fim, janelaAnos)
@@ -107,7 +192,11 @@ export default function App() {
         </div>
         {dados && (
           <p className="subtitulo">
-            {Object.keys(dados.parametros.pesos).join(' · ')}
+            {classeDosDados === 'renda-fixa'
+              ? dados.marcacao.posicoes
+                  .map((p) => `${p.tipo} ${p.vencimento.slice(0, 4)}`)
+                  .join(' · ')
+              : Object.keys(dados.parametros.pesos).join(' · ')}
             <br />
             {rotuloConfianca(dados.parametros.confianca)} · {dados.parametros.horizonte_dias}d ·
             janela {dados.parametros.janela_backtest} · {dataCurta(dados.parametros.inicio)} a{' '}
@@ -136,6 +225,8 @@ export default function App() {
           <AbaBook
             params={params}
             setParams={setParams}
+            classe={classe}
+            setClasse={setClasse}
             onCalcular={calcular}
             carregando={carregando}
             dados={dados}
@@ -145,6 +236,7 @@ export default function App() {
         {aba === 'vars' &&
           (dados ? (
             <>
+              <FaixaClasse dados={dados} classe={classeDosDados} />
               <Kpis dados={dados} />
               <SeletorJanela
                 valor={janelaAnos}
@@ -163,19 +255,35 @@ export default function App() {
             semDados
           ))}
 
-        {aba === 'risco' && (dados ? <AbaRiscoRetorno dados={dados} /> : semDados)}
+        {aba === 'risco' &&
+          (dados ? (
+            <>
+              <FaixaClasse dados={dados} classe={classeDosDados} />
+              <AbaRiscoRetorno dados={dados} />
+            </>
+          ) : (
+            semDados
+          ))}
       </main>
 
       {dados && (
         <div className="rodape">
           <span>
-            Preços: yfinance (fechamento ajustado) · taxa livre de risco:{' '}
+            {classeDosDados === 'acoes'
+              ? 'Preços: yfinance (fechamento ajustado)'
+              : `Preços: ${
+                  classeDosDados === 'consolidado' ? 'yfinance (fechamento ajustado) e ' : ''
+                }PU de venda do Tesouro Transparente (data base ${dataCurta(
+                  dados.marcacao.data_base
+                )})`}{' '}
+            · taxa livre de risco:{' '}
             {dados.risco_retorno?.fonte_taxa === 'bcb-sgs-11'
               ? 'Selic diária, série 11 do BCB'
               : 'taxa fixa (BCB indisponível)'}
           </span>
           <span>
-            {dados.parametros.pregoes} pregões · carteira de{' '}
+            {dados.parametros.pregoes}{' '}
+            {classeDosDados === 'acoes' ? 'pregões' : 'datas-base'} · carteira de{' '}
             {dados.parametros.valor_carteira.toLocaleString('pt-BR', {
               style: 'currency',
               currency: 'BRL',

@@ -1,14 +1,14 @@
 import { useMemo } from 'react'
+import ParametrosRisco from './ParametrosRisco'
 import { brl, pct } from '../formato'
 
-const CONFIANCAS = [
-  { valor: 0.9, texto: '90%' },
-  { valor: 0.95, texto: '95%' },
-  { valor: 0.975, texto: '97,5%' },
-  { valor: 0.99, texto: '99%' },
-]
-
-export default function PainelParametros({ params, setParams, onCalcular, carregando }) {
+export default function PainelParametros({
+  params,
+  setParams,
+  onCalcular,
+  carregando,
+  mostrarParametros = true,
+}) {
   const { posicoes } = params
 
   const somaPesos = useMemo(
@@ -19,8 +19,6 @@ export default function PainelParametros({ params, setParams, onCalcular, carreg
   // valor nominal = fatia do peso sobre o valor total da carteira
   const nominal = (peso) =>
     somaPesos > 0 ? ((Number(peso) || 0) / somaPesos) * Number(params.valor_carteira) : 0
-
-  const atualizar = (campo, valor) => setParams((p) => ({ ...p, [campo]: valor }))
 
   const atualizarPosicao = (i, campo, valor) =>
     setParams((p) => ({
@@ -40,7 +38,7 @@ export default function PainelParametros({ params, setParams, onCalcular, carreg
     params.inicio < params.fim
 
   return (
-    <div className="book">
+    <div className={mostrarParametros ? 'book' : undefined}>
       <div className="cartao">
         <h3>Carteira</h3>
         <p className="legenda">
@@ -109,97 +107,16 @@ export default function PainelParametros({ params, setParams, onCalcular, carreg
         </button>
       </div>
 
-      <div className="cartao">
-        <h3>Parâmetros de risco</h3>
-        <p className="legenda">
-          Valem para os três VaRs ao mesmo tempo — é o que torna a comparação entre eles honesta.
-        </p>
-
-        <div className="campo">
-          <label>Valor da carteira</label>
-          <input
-            type="number"
-            min="1"
-            step="1000"
-            value={params.valor_carteira}
-            onChange={(e) => atualizar('valor_carteira', Number(e.target.value))}
-          />
-        </div>
-
-        <div className="dupla">
-          <div className="campo">
-            <label>Início</label>
-            <input
-              type="date"
-              value={params.inicio}
-              onChange={(e) => atualizar('inicio', e.target.value)}
-            />
-          </div>
-          <div className="campo">
-            <label>Fim</label>
-            <input
-              type="date"
-              value={params.fim}
-              onChange={(e) => atualizar('fim', e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="dupla">
-          <div className="campo">
-            <label>Confiança</label>
-            <select
-              value={params.confianca}
-              onChange={(e) => atualizar('confianca', Number(e.target.value))}
-            >
-              {CONFIANCAS.map((c) => (
-                <option key={c.valor} value={c.valor}>
-                  {c.texto}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="campo">
-            <label>Horizonte (dias)</label>
-            <input
-              type="number"
-              min="1"
-              max="60"
-              value={params.horizonte}
-              onChange={(e) => atualizar('horizonte', Number(e.target.value))}
-            />
-          </div>
-        </div>
-
-        <div className="campo">
-          <label>Janela do backtest (pregões)</label>
-          <input
-            type="number"
-            min="30"
-            max="1500"
-            step="21"
-            value={params.janela}
-            onChange={(e) => atualizar('janela', Number(e.target.value))}
-          />
-        </div>
-
-        <div className="separador" />
-
-        <button className="btn-principal" onClick={onCalcular} disabled={!valido || carregando}>
-          {carregando ? (
-            <>
-              <span className="carregando" />
-              calculando…
-            </>
-          ) : (
-            'Rodar análise'
-          )}
-        </button>
-        <p className="aviso-pesos">
-          Puxa preços do yfinance e a Selic do Banco Central. A primeira consulta leva alguns
-          segundos.
-        </p>
-      </div>
+      {mostrarParametros && (
+        <ParametrosRisco
+          params={params}
+          setParams={setParams}
+          onCalcular={onCalcular}
+          carregando={carregando}
+          valido={valido}
+          aviso="Puxa preços do yfinance e a Selic do Banco Central. A primeira consulta leva alguns segundos."
+        />
+      )}
     </div>
   )
 }

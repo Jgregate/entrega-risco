@@ -497,6 +497,19 @@ select option {
   background: var(--quase-preto);
 }
 
+/* campos preenchidos pela fonte: visíveis, legíveis e fora de edição */
+input.travado {
+  background: rgba(255, 255, 255, 0.035);
+  border-style: dashed;
+  color: var(--texto-suave);
+  cursor: default;
+}
+
+input.travado:focus {
+  border-color: var(--borda-forte);
+  box-shadow: none;
+}
+
 .dupla {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -783,4 +796,56 @@ td.perda {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* --------------------------- avisos do book ----------------------- */
+/* Amostra curta, interseção de datas, calendários defasados: sai um item por
+   aviso estruturado que o backend devolveu, e não um texto genérico. */
+.avisos {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.avisos li {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--texto-suave);
+  border-left: 2px solid var(--borda-forte);
+  padding-left: 10px;
+}
+
+.avisos li.perda {
+  color: var(--vermelho-claro);
+  border-left-color: var(--vermelho-claro);
+}
+
+.avisos li.destaque-suave {
+  border-left-color: var(--vermelho-medio);
+}
+
+.btn-texto:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn-texto:disabled:hover {
+  border-color: var(--borda-forte);
+  color: var(--texto-suave);
+}
+
+/* o popup do select é desenhado pelo sistema: sem cor explícita, o rótulo do
+   optgroup sai escuro sobre escuro em parte dos navegadores */
+select optgroup {
+  background: var(--quase-preto);
+  color: var(--texto-fraco);
+  font-style: normal;
+}
+
+select option {
+  background: var(--quase-preto);
+  color: var(--texto);
 }

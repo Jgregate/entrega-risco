@@ -34,14 +34,21 @@ import pandas as pd
 import requests
 
 from .._certs import sessao_requests
+from . import cadastro, carteira
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 DB_PATH = DATA_DIR / "fundos_cache.db"
 INFORMES_DIR = DATA_DIR / "cvm_informes"
 
-REGISTRY_URL = "https://dados.cvm.gov.br/dados/FI/CAD/DADOS/registro_fundo_classe.zip"
 INFORME_URL = "https://dados.cvm.gov.br/dados/FI/DOC/INF_DIARIO/DADOS/inf_diario_fi_{yyyymm}.zip"
 BCB_CDI_URL = "https://api.bcb.gov.br/dados/serie/bcdata.sgs.12/dados"
+
+# Teto de historico que o sistema aceita voltar. "Desde o inicio do fundo"
+# significa, na pratica, "desde o inicio dentro desta janela": cada mes a mais
+# e um ZIP de ~11 MB baixado e parseado uma vez. 10 anos cobrem o historico
+# relevante de praticamente qualquer classe ativa sem transformar a primeira
+# consulta numa espera de minutos.
+MAX_MESES_HISTORICO = 120
 
 REQUEST_TIMEOUT = 30
 # leitura de cada mes e I/O + parsing em C (libera o GIL boa parte do tempo),
@@ -55,6 +62,9 @@ MAX_WORKERS = 16
 # (nunca mudam, tanto no banco quanto no ZIP baixado). O endpoint de
 # atualizacao forca uma checagem na hora, ignorando essa janela.
 MESES_RECENTES = 1
+
+# Meses num ano - anualizacao das metricas mensais do ranking.
+MESES_ANO = 12
 ATUALIZACAO_HORAS = 6
 
 # cache em memoria leve para chamadas de rede baratas de refazer (CDI,
@@ -123,13 +133,36 @@ def _connect() -> sqlite3.Connection:
     )
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS registro (
-            cnpj_fmt           TEXT PRIMARY KEY,
-            denominacao_social TEXT NOT NULL,
-            atualizado_em      REAL NOT NULL
+        CREATE TABLE IF NOT EXISTS cotas_diarias (
+            cnpj_fmt      TEXT NOT NULL,
+            data          TEXT NOT NULL,
+            vl_quota      REAL NOT NULL,
+            vl_patrim_liq REAL,
+            vl_total      REAL,
+            captc_dia     REAL,
+            resg_dia      REAL,
+            nr_cotst      INTEGER,
+            PRIMARY KEY (cnpj_fmt, data)
         )
         """
     )
+    # Marca quais (fundo, mes) ja tiveram a serie diaria extraida. Sem isso nao
+    # da para distinguir "mes sem nenhuma cota reportada para esse fundo" de
+    # "mes que ainda nao foi lido" - e o primeiro caso e comum (fundo novo,
+    # fundo encerrado, fundo que nao reportou).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dias_lidos (
+            cnpj_fmt TEXT NOT NULL,
+            ano      INTEGER NOT NULL,
+            mes      INTEGER NOT NULL,
+            lido_em  REAL NOT NULL,
+            PRIMARY KEY (cnpj_fmt, ano, mes)
+        )
+        """
+    )
+    cadastro.cria_tabelas(conn)
+    carteira.cria_tabelas(conn)
     return conn
 
 
@@ -138,7 +171,17 @@ def _read_informe(path, extra_cols=()):
     ja usou: ate nov/2023 a coluna de CNPJ se chamava CNPJ_FUNDO; a partir
     de dez/2023 (Resolucao CVM 175, fundos organizados em "classes") passou
     a ser CNPJ_FUNDO_CLASSE. Sempre devolve a coluna como CNPJ_FUNDO_CLASSE,
-    ou None se o arquivo nao existir/nao puder ser lido em nenhum formato."""
+    ou None se o arquivo nao existir/nao puder ser lido em nenhum formato.
+
+    Linhas com VL_QUOTA <= 0 sao descartadas aqui, na fonte unica que todo o
+    resto do modulo consome (cache mensal, serie diaria, book). Cota de fundo
+    nunca e legitimamente zero ou negativa; quando a CVM publica isso, e
+    artefato de migracao de classe (RCVM 175) ou erro de reporte do
+    administrador - visto na pratica em pelo menos um CNPJ_FUNDO_CLASSE que
+    reporta VL_QUOTA=0 por semanas antes de retomar o valor normal. Sem este
+    filtro, esse zero e tratado como preco real: derruba a posicao a zero no
+    valor consolidado do book e produz um salto de centenas de % quando o
+    valor volta - silencioso em qualquer lugar que nao seja o grafico."""
     try:
         with zipfile.ZipFile(path) as z:
             name = z.namelist()[0]
@@ -153,7 +196,7 @@ def _read_informe(path, extra_cols=()):
                         )
                     if cnpj_col != "CNPJ_FUNDO_CLASSE":
                         df = df.rename(columns={cnpj_col: "CNPJ_FUNDO_CLASSE"})
-                    return df
+                    return df[df["VL_QUOTA"] > 0].reset_index(drop=True)
                 except ValueError:
                     continue
     except zipfile.BadZipFile:
@@ -320,65 +363,32 @@ def _cnpjs_com_dados_recentes():
 
 
 # --------------------------------------------------------------------------- #
-# Registro de fundos
+# Cadastro e busca de fundos
 # --------------------------------------------------------------------------- #
 
-def _registro_precisa_rebaixar(conn) -> bool:
-    row = conn.execute("SELECT MAX(atualizado_em) FROM registro").fetchone()
-    if row is None or row[0] is None:
-        return True
-    return (time.time() - row[0]) >= ATUALIZACAO_HORAS * 3600
-
-
-def _rebaixa_registro(conn) -> None:
-    tem_dados = conn.execute("SELECT 1 FROM registro LIMIT 1").fetchone() is not None
-    conteudo = None
-    for tentativa in range(3):
-        try:
-            resp = sessao_requests().get(REGISTRY_URL, timeout=60)
-            resp.raise_for_status()
-            conteudo = resp.content
-            break
-        except requests.RequestException:
-            if tentativa == 2:
-                if not tem_dados:
-                    raise
-                return  # rede falhou mas ja existe registro (mesmo que velho) - mantem
-            time.sleep(1.5 * (tentativa + 1))
-
-    with zipfile.ZipFile(io.BytesIO(conteudo)) as z:
-        with z.open("registro_classe.csv") as f:
-            df = pd.read_csv(
-                f, sep=";", encoding="latin1",
-                usecols=["CNPJ_Classe", "Denominacao_Social", "Situacao"],
-            )
-
-    df = df[df["Situacao"] == "Em Funcionamento Normal"].copy()
-    df["Denominacao_Social"] = df["Denominacao_Social"].str.strip()
-    df["cnpj_fmt"] = df["CNPJ_Classe"].apply(_cnpj_fmt)
-    df = df.drop_duplicates(subset="cnpj_fmt")
-
-    agora = time.time()
-    conn.execute("DELETE FROM registro")
-    conn.executemany(
-        "INSERT INTO registro (cnpj_fmt, denominacao_social, atualizado_em) VALUES (?, ?, ?)",
-        [(r.cnpj_fmt, r.Denominacao_Social, agora) for r in df.itertuples()],
-    )
-    conn.commit()
-
-
 def load_registry() -> pd.DataFrame:
-    """Registro de classes de fundos ativas na CVM (nome + CNPJ), restrito
-    as que de fato reportaram cota recentemente (tem dados para analisar)."""
+    """Classes de fundos ATIVAS na CVM que de fato reportaram cota
+    recentemente (ou seja: tem historico para analisar).
+
+    Continua devolvendo `cnpj_fmt` + `Denominacao_Social` porque e o contrato
+    que o ranking Top N consome; as colunas de classificacao vem junto para o
+    filtro de categoria do ranking nao precisar de uma segunda consulta, e o
+    cadastro completo continua saindo por `cadastro_fundo`.
+    """
     conn = _connect()
     try:
-        if _registro_precisa_rebaixar(conn):
-            _rebaixa_registro(conn)
-        df = pd.read_sql("SELECT cnpj_fmt, denominacao_social FROM registro", conn)
+        if cadastro.precisa_rebaixar(conn):
+            cadastro.rebaixa(conn)
+        df = pd.read_sql(
+            "SELECT cnpj_fmt, nome AS Denominacao_Social, gestora, codigo_cvm, "
+            "       tipo_fundo, classificacao_cvm, classificacao_anbima, previdenciario "
+            "FROM cadastro WHERE situacao = ?",
+            conn, params=(cadastro.SITUACAO_ATIVA,),
+        )
     finally:
         conn.close()
 
-    df = df.rename(columns={"denominacao_social": "Denominacao_Social"})
+    df = df.dropna(subset=["Denominacao_Social"])
     cnpjs_ativos = _cnpjs_com_dados_recentes()
     if cnpjs_ativos:
         df = df[df["cnpj_fmt"].isin(cnpjs_ativos)]
@@ -386,12 +396,37 @@ def load_registry() -> pd.DataFrame:
 
 
 def search_funds(query, registry, limit=40):
-    """Filtra o registro pelo nome do fundo (case-insensitive)."""
-    q = query.strip().upper()
+    """Filtra o registro por nome, CNPJ, codigo CVM ou gestora.
+
+    Os quatro campos entram na mesma caixa de busca porque o usuario nao sabe
+    de antemao qual deles tem em maos - e o formato do que ele digitou ja
+    diz quase sempre o que ele quis dizer. So o nome e a gestora usam
+    substring; CNPJ e codigo CVM comparam por digitos, para funcionar tanto
+    com `12.345.678/0001-90` quanto com `12345678000190`.
+    """
+    q = str(query).strip()
     if not q:
         return registry.head(0)
-    mask = registry["Denominacao_Social"].str.upper().str.contains(q, regex=False)
-    return registry[mask].head(limit)
+
+    alvo = registry
+    nome = alvo["Denominacao_Social"].str.upper()
+    gestora = alvo["gestora"].fillna("").str.upper()
+    mask = nome.str.contains(q.upper(), regex=False) | gestora.str.contains(
+        q.upper(), regex=False
+    )
+
+    digitos = re.sub(r"\D", "", q)
+    if digitos:
+        cnpj_digitos = alvo["cnpj_fmt"].str.replace(r"\D", "", regex=True)
+        mask = mask | cnpj_digitos.str.contains(digitos, regex=False)
+        mask = mask | alvo["codigo_cvm"].fillna("").astype(str).str.strip().eq(
+            digitos.lstrip("0")
+        )
+
+    # nome comecando com o termo vem antes de nome que so o contem
+    achados = alvo[mask].copy()
+    achados["_rank"] = (~nome[mask].str.startswith(q.upper())).astype(int)
+    return achados.sort_values(["_rank", "Denominacao_Social"]).head(limit)
 
 
 def fund_by_cnpj(cnpj_fmt: str, registry: pd.DataFrame) -> str | None:
@@ -399,9 +434,59 @@ def fund_by_cnpj(cnpj_fmt: str, registry: pd.DataFrame) -> str | None:
     return None if linha.empty else str(linha.iloc[0]["Denominacao_Social"])
 
 
+def cadastro_fundo(cnpj_fmt: str) -> dict | None:
+    """Linha completa do cadastro institucional de uma classe, ou None."""
+    conn = _connect()
+    try:
+        if cadastro.precisa_rebaixar(conn):
+            cadastro.rebaixa(conn)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM cadastro WHERE cnpj_fmt = ?", (cnpj_fmt,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    dados = {k: row[k] for k in row.keys() if k != "atualizado_em"}
+    return dados
+
+
 # --------------------------------------------------------------------------- #
 # Ranking Top N
 # --------------------------------------------------------------------------- #
+
+def _metricas_mensais(quotas: pd.DataFrame, meses: int, cdi_acumulado: float | None):
+    """Volatilidade, drawdown maximo e Sharpe da janela, a partir das cotas
+    mensais - as mesmas colunas que ja sustentam o retorno do ranking.
+
+    Tudo aqui e mensal por construcao: o ranking varre o mercado inteiro, e
+    baixar a serie diaria de 25 mil fundos para refinar a terceira casa da
+    volatilidade custaria minutos por consulta. Os numeros da tela do fundo
+    (diarios) sao os finos; estes servem para comparar fundos entre si dentro
+    da mesma janela.
+
+    Sharpe so sai em janelas de pelo menos 12 meses, pela mesma razao que
+    `analytics.anualizado` nao extrapola periodo curto: anualizar 1 mes de
+    alta produz um numero que o usuario leria como projecao.
+    """
+    mensais = quotas.pct_change(axis=1)
+    vol = mensais.std(axis=1, ddof=1) * np.sqrt(MESES_ANO)
+
+    curva = quotas.div(quotas.iloc[:, 0], axis=0)
+    drawdown = (curva / curva.cummax(axis=1) - 1.0).min(axis=1)
+
+    retorno = quotas.iloc[:, -1] / quotas.iloc[:, 0] - 1.0
+    if meses >= MESES_ANO and cdi_acumulado is not None:
+        expoente = MESES_ANO / meses
+        ann = (1.0 + retorno).clip(lower=0.0) ** expoente - 1.0
+        cdi_ann = (1.0 + cdi_acumulado) ** expoente - 1.0
+        sharpe = (ann - cdi_ann) / vol.replace(0.0, np.nan)
+    else:
+        sharpe = pd.Series(np.nan, index=quotas.index)
+
+    return vol * 100, drawdown * 100, sharpe
+
 
 def _ranking_a_partir_de(
     quotas: pd.DataFrame,
@@ -410,45 +495,100 @@ def _ranking_a_partir_de(
     min_cotistas: int,
     salto_mensal_max: float,
     top_n: int,
+    cdi_acumulado: float | None = None,
 ) -> pd.DataFrame:
     """Nucleo puro do ranking (sem rede/banco) - isolado para ser testavel
-    com DataFrames sinteticos."""
+    com DataFrames sinteticos.
+
+    `registry` ja chega filtrado pela categoria escolhida: o merge no fim e
+    `inner`, entao quem nao esta no registry simplesmente nao entra no ranking.
+    """
     primeiro, ultimo = quotas.columns[0], quotas.columns[-1]
     base = quotas[[primeiro, ultimo]].dropna()
+    # cota inicial zerada ou negativa produz retorno infinito e, sem este
+    # filtro, esse fundo encabeca o ranking com um numero que nao existe
+    base = base[(base[primeiro] > 0) & (base[ultimo] > 0)]
     if base.empty:
         return pd.DataFrame()
     retorno_total = (base[ultimo] / base[primeiro] - 1) * 100
+    retorno_total = retorno_total[np.isfinite(retorno_total)]
+    if retorno_total.empty:
+        return pd.DataFrame()
+
+    janela = quotas.loc[retorno_total.index]
 
     # saltos mensais acima do limite quase sempre sao desdobramento/
     # grupamento de cotas ou erro de reporte da CVM, nao desempenho real
-    pico_mensal = quotas.loc[retorno_total.index].pct_change(axis=1).abs().max(axis=1) * 100
+    pico_mensal = janela.pct_change(axis=1).abs().max(axis=1) * 100
     sem_saltos = pico_mensal <= salto_mensal_max
+
+    vol, drawdown, sharpe = _metricas_mensais(
+        janela, len(quotas.columns) - 1, cdi_acumulado
+    )
 
     resultado = pd.DataFrame({
         "cnpj_fmt": retorno_total.index,
         "retorno_%": retorno_total.values,
+        "volatilidade_%": vol.values,
+        "drawdown_%": drawdown.values,
+        "sharpe": sharpe.values,
         "patrimonio_mi": (snap_final["VL_PATRIM_LIQ"].reindex(retorno_total.index) / 1e6).values,
         "cotistas": snap_final["NR_COTST"].reindex(retorno_total.index).values,
     })
     resultado = resultado[sem_saltos.values & (resultado["cotistas"] >= min_cotistas)]
 
-    resultado = resultado.merge(
-        registry[["cnpj_fmt", "Denominacao_Social"]], on="cnpj_fmt", how="inner"
-    )
+    colunas = ["cnpj_fmt", "Denominacao_Social"]
+    colunas += [c for c in ("gestora", "categoria") if c in registry.columns]
+    resultado = resultado.merge(registry[colunas], on="cnpj_fmt", how="inner")
     return resultado.sort_values("retorno_%", ascending=False).head(top_n).reset_index(drop=True)
 
 
-def top_funds_by_return(n_years, top_n=10, min_cotistas=100, salto_mensal_max=80.0):
-    """Os top_n fundos com maior retorno acumulado nos ultimos n_years anos
+def _registry_da_categoria(chave: str | None) -> pd.DataFrame:
+    """Registry com a coluna `categoria`, filtrado quando uma foi pedida."""
+    registry = load_registry()
+    if registry.empty:
+        return registry
+    registry = registry.assign(
+        categoria=registry.apply(cadastro.categoria, axis=1)
+    )
+    if chave:
+        registry = registry[registry["categoria"] == chave]
+    return registry
+
+
+def _cdi_acumulado(months) -> float | None:
+    """CDI composto da janela (decimal), ou None se o BCB nao responder."""
+    try:
+        mensal = fetch_cdi_monthly(months[1:])
+    except (requests.RequestException, ValueError, KeyError):
+        # o CDI aqui so alimenta o Sharpe; sem ele o ranking ainda vale
+        return None
+    if not mensal:
+        return None
+    return float(np.prod([1.0 + m / 100.0 for m in mensal]) - 1.0)
+
+
+def top_funds_by_return(
+    meses, top_n=10, min_cotistas=100, salto_mensal_max=80.0, categoria=None
+):
+    """Os top_n fundos com maior retorno acumulado nos ultimos `meses` meses
     (janela fechada), entre os fundos com pelo menos min_cotistas cotistas
-    (evita fundos exclusivos/institucionais distorcendo o ranking) e sem
-    nenhum salto mensal acima de salto_mensal_max%."""
-    chave = ("top10", n_years, top_n, min_cotistas, salto_mensal_max)
+    (evita fundos exclusivos/institucionais distorcendo o ranking), sem
+    nenhum salto mensal acima de salto_mensal_max% e, se `categoria` vier,
+    so os fundos daquela categoria (ver `cadastro.CATEGORIAS`).
+
+    Uma ressalva que a interface precisa dizer ao usuario: a fonte aqui e o
+    informe diario (INF_DIARIO), que cobre as classes do tipo FIF. FII, ETF,
+    Fiagro e boa parte dos FIDC/FIP nao reportam nele, entao essas categorias
+    saem com poucos fundos ou vazias - o que e uma lacuna da fonte, nao uma
+    ausencia de fundos.
+    """
+    chave = ("top10", meses, top_n, min_cotistas, salto_mensal_max, categoria)
     cacheado = _cache_get(chave)
     if cacheado is not None:
         return cacheado.copy()
 
-    month_range = _month_range(n_years * 12)  # n_years*12 + 1 meses, antigo -> novo
+    month_range = _month_range(meses)  # meses + 1 meses, antigo -> novo
 
     snaps = {}
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
@@ -462,10 +602,227 @@ def top_funds_by_return(n_years, top_n=10, min_cotistas=100, salto_mensal_max=80
 
     quotas = pd.DataFrame({ym: snaps[ym]["VL_QUOTA"] for ym in meses_validos})[meses_validos]
     resultado = _ranking_a_partir_de(
-        quotas, snaps[meses_validos[-1]], load_registry(), min_cotistas, salto_mensal_max, top_n
+        quotas,
+        snaps[meses_validos[-1]],
+        _registry_da_categoria(categoria),
+        min_cotistas,
+        salto_mensal_max,
+        top_n,
+        _cdi_acumulado(meses_validos),
     )
     _cache_set(chave, resultado)
     return resultado.copy()
+
+
+# --------------------------------------------------------------------------- #
+# Serie DIARIA de um fundo
+# --------------------------------------------------------------------------- #
+#
+# O informe diario traz uma linha por (classe, pregao). O modulo original so
+# guardava o fechamento de cada mes, o que basta para retorno mensal mas nao
+# para o que esta tela precisa: janela de 1 mes, drawdown, volatilidade movel
+# e patrimonio dia a dia. Entao a serie diaria tambem e persistida - mas so
+# dos fundos que alguem realmente abriu, porque guardar todos os fundos de
+# todos os dias seriam dezenas de milhoes de linhas para um punhado que
+# interessa.
+
+COLUNAS_DIARIAS = ("VL_PATRIM_LIQ", "VL_TOTAL", "CAPTC_DIA", "RESG_DIA", "NR_COTST")
+
+
+def _ou_nulo(valor):
+    return None if pd.isna(valor) else float(valor)
+
+
+def _meses_entre(inicio: date, fim: date) -> list[tuple[int, int]]:
+    """Todos os (ano, mes) de `inicio` a `fim`, inclusive, do mais antigo
+    para o mais novo."""
+    meses = []
+    y, m = inicio.year, inicio.month
+    while (y, m) <= (fim.year, fim.month):
+        meses.append((y, m))
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+    return meses
+
+
+def _dias_ja_lidos(conn, cnpjs, year, month) -> set[str]:
+    marcas = conn.execute(
+        "SELECT cnpj_fmt FROM dias_lidos WHERE ano = ? AND mes = ? "
+        "AND cnpj_fmt IN ({})".format(",".join("?" * len(cnpjs))),
+        (year, month, *cnpjs),
+    ).fetchall()
+    return {r[0] for r in marcas}
+
+
+def _ingere_mes_diario(cnpjs: tuple[str, ...], year: int, month: int) -> None:
+    """Le o ZIP de um mes uma unica vez e grava a serie diaria de todos os
+    `cnpjs` pedidos.
+
+    Recebe varios CNPJs de proposito: analisar um book de 12 fundos nao pode
+    custar 12 leituras do mesmo arquivo de meio milhao de linhas.
+    """
+    conn = _connect()
+    try:
+        faltando = tuple(c for c in cnpjs if c not in _dias_ja_lidos(conn, cnpjs, year, month))
+        if not faltando:
+            return
+
+        path = _download_month(year, month)
+        if path is None:
+            return  # sem rede e sem arquivo local: nada a gravar, tenta de novo depois
+
+        df = _read_informe(path, extra_cols=COLUNAS_DIARIAS)
+        if df is None:
+            return
+
+        df = df[df["CNPJ_FUNDO_CLASSE"].isin(faltando)]
+        linhas = [
+            (
+                r.CNPJ_FUNDO_CLASSE,
+                str(r.DT_COMPTC)[:10],
+                float(r.VL_QUOTA),
+                _ou_nulo(r.VL_PATRIM_LIQ),
+                _ou_nulo(r.VL_TOTAL),
+                _ou_nulo(r.CAPTC_DIA),
+                _ou_nulo(r.RESG_DIA),
+                None if pd.isna(r.NR_COTST) else int(r.NR_COTST),
+            )
+            for r in df.itertuples()
+            if pd.notna(r.VL_QUOTA)
+        ]
+        if linhas:
+            conn.executemany(
+                "INSERT OR REPLACE INTO cotas_diarias "
+                "(cnpj_fmt, data, vl_quota, vl_patrim_liq, vl_total, captc_dia, "
+                "resg_dia, nr_cotst) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                linhas,
+            )
+        # marca TODOS os pedidos, inclusive os que nao renderam linha nenhuma:
+        # "li esse mes e esse fundo nao reportou" tambem e resposta, e nao pode
+        # virar releitura do ZIP a cada consulta
+        agora = time.time()
+        conn.executemany(
+            "INSERT OR REPLACE INTO dias_lidos (cnpj_fmt, ano, mes, lido_em) "
+            "VALUES (?, ?, ?, ?)",
+            [(c, year, month, agora) for c in faltando],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _garante_series_diarias(cnpjs: tuple[str, ...], meses: list[tuple[int, int]]) -> None:
+    """Garante que todos os pares (fundo, mes) pedidos estejam no banco.
+
+    Meses fechados antigos ja lidos nunca sao relidos; os recentes seguem a
+    mesma regra de revisao da CVM usada no resto do modulo.
+    """
+    conn = _connect()
+    try:
+        pendentes = []
+        for y, m in meses:
+            lidos = _dias_ja_lidos(conn, cnpjs, y, m)
+            if _mes_e_recente(y, m) and _precisa_rebaixar(conn, y, m):
+                pendentes.append((y, m))  # mes ainda revisavel pela CVM: rele
+            elif any(c not in lidos for c in cnpjs):
+                pendentes.append((y, m))
+
+        # mes recente que sera relido: a marca antiga sai para o ingest reescrever
+        for y, m in pendentes:
+            if _mes_e_recente(y, m):
+                conn.execute(
+                    "DELETE FROM dias_lidos WHERE ano = ? AND mes = ? "
+                    "AND cnpj_fmt IN ({})".format(",".join("?" * len(cnpjs))),
+                    (y, m, *cnpjs),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not pendentes:
+        return
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        for futuro in [ex.submit(_ingere_mes_diario, cnpjs, y, m) for y, m in pendentes]:
+            futuro.result()
+
+
+def serie_diaria(cnpjs, inicio: date | None = None, fim: date | None = None) -> pd.DataFrame:
+    """Serie diaria (cota, PL, patrimonio total, captacao, resgate, cotistas)
+    de um ou varios fundos, em formato longo.
+
+    `inicio=None` significa "desde o comeco do historico disponivel", ate o
+    teto de MAX_MESES_HISTORICO.
+
+    Esse teto NAO usa a data de inicio da classe no cadastro como atalho: um
+    CNPJ_FUNDO_CLASSE pode ter informe diario publicado antes da propria data
+    de registro (migracao de classe pela RCVM 175, entre outros motivos), e
+    um fundo real teve o historico de "desde o inicio" cortado por confiar
+    nessa data. Sem atalho, a primeira consulta de um fundo busca ate o teto
+    inteiro (mais lenta), mas o cache torna as seguintes instantaneas e o
+    resultado nunca omite historico que existe.
+    """
+    if isinstance(cnpjs, str):
+        cnpjs = [cnpjs]
+    cnpjs = tuple(dict.fromkeys(cnpjs))
+    if not cnpjs:
+        return pd.DataFrame()
+
+    # o mes CORRENTE entra aqui, ao contrario do resto do modulo: a CVM
+    # publica o informe do mes aberto dia a dia, e e dele que saem a cota mais
+    # recente, o drawdown atual e o valor de mercado do book. Ficar so nos
+    # meses fechados atrasaria a carteira do usuario em ate um mes.
+    fim_ref = fim or date.today()
+
+    if inicio is None:
+        y, m = _mes_n_atras(MAX_MESES_HISTORICO - 1)
+        inicio_ref = date(y, m, 1)
+    else:
+        inicio_ref = inicio
+
+    meses = _meses_entre(inicio_ref, fim_ref)
+    if not meses:
+        return pd.DataFrame()
+    if len(meses) > MAX_MESES_HISTORICO:
+        meses = meses[-MAX_MESES_HISTORICO:]
+
+    _garante_series_diarias(cnpjs, meses)
+
+    # o recorte por data no SQL usa o primeiro dia do primeiro mes lido, nao
+    # `inicio_ref`, para uma janela de 1 mes ainda trazer o pregao anterior de
+    # que o primeiro retorno precisa - quem apara a ponta e o analytics
+    piso = date(meses[0][0], meses[0][1], 1)
+    conn = _connect()
+    try:
+        df = pd.read_sql(
+            "SELECT cnpj_fmt, data, vl_quota, vl_patrim_liq, vl_total, captc_dia, "
+            "resg_dia, nr_cotst FROM cotas_diarias "
+            "WHERE cnpj_fmt IN ({}) AND data >= ? AND data <= ? "
+            "ORDER BY cnpj_fmt, data".format(",".join("?" * len(cnpjs))),
+            conn,
+            params=(*cnpjs, piso.isoformat(), fim_ref.isoformat()),
+        )
+    finally:
+        conn.close()
+
+    if df.empty:
+        return df
+    df["data"] = pd.to_datetime(df["data"])
+    return df
+
+
+def primeira_cota(cnpj_fmt: str) -> str | None:
+    """Data da primeira cota ja lida para o fundo, se houver."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT MIN(data) FROM cotas_diarias WHERE cnpj_fmt = ?", (cnpj_fmt,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0] if row and row[0] else None
+
 
 
 # --------------------------------------------------------------------------- #
@@ -630,7 +987,8 @@ def limpar_cache() -> None:
 
     conn = _connect()
     try:
-        conn.execute("DELETE FROM registro")
+        cadastro.invalida(conn)
+        carteira.invalida(conn)
         for diff in range(MESES_RECENTES + 1):
             y, m = _mes_n_atras(diff)
             conn.execute("DELETE FROM meses_baixados WHERE ano = ? AND mes = ?", (y, m))

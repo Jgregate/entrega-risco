@@ -16,6 +16,7 @@ from . import risco_retorno as rr
 from .analise import analisar
 from .data import ErroDeDados, baixar_precos, buscar_nome
 from .fundos.router import router as fundos_router
+from .fundos.router import router_book
 from .schemas import PedidoVaR
 from .selic import ErroSelic, alinha_com_carteira, serie_selic, taxa_anual_para_diaria
 from .var_core import retorno_carteira, retornos_simples
@@ -48,6 +49,7 @@ app.add_middleware(
 )
 
 app.include_router(fundos_router)
+app.include_router(router_book)
 
 
 @app.get("/api/health", tags=["infra"])

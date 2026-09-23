@@ -534,7 +534,8 @@ def posicoes_de_renda_fixa(precos: pd.DataFrame, marcacao: dict) -> list[dict]:
         itens.append(
             {
                 "id": papel,
-                "rotulo": f"{linha['tipo']} {linha['vencimento'][:4]}",
+                # o codigo oficial do papel, nao o nome comercial do Tesouro
+                "rotulo": linha["rotulo"],
                 "classe": "renda-fixa",
                 "peso": linha["peso"],
                 "preco_atual": pu_atual,
@@ -547,6 +548,7 @@ def posicoes_de_renda_fixa(precos: pd.DataFrame, marcacao: dict) -> list[dict]:
                 "detalhe": {
                     "tipo": linha["tipo"],
                     "tipo_slug": linha["tipo_slug"],
+                    "codigo": linha["codigo"],
                     "vencimento": linha["vencimento"],
                     "pu_marcacao": linha["pu_marcacao"],
                     "data_base": linha["data_base"],

@@ -54,10 +54,12 @@ export default function TabelaMarcacao({ marcacao, avisos = [] }) {
         <tbody>
           {posicoes.map((p) => (
             <tr key={p.id}>
+              {/* o código oficial identifica o papel; o nome comercial do
+                  Tesouro fica abaixo, junto do vencimento */}
               <td style={{ color: '#fff', fontWeight: 500 }}>
-                {p.tipo}
+                {p.rotulo ?? p.tipo}
                 <span className="legenda-mini" style={{ display: 'block', margin: 0 }}>
-                  vence {dataCurta(p.vencimento)}
+                  {p.tipo} · vence {dataCurta(p.vencimento)}
                 </span>
               </td>
               <td className="num">{num(p.quantidade)}</td>

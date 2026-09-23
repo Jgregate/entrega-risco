@@ -1,6 +1,9 @@
+import Composicao from './Composicao'
 import GraficoPosse from './GraficoPosse'
 import GraficoProjecao from './GraficoProjecao'
 import GraficoValorizacao from './GraficoValorizacao'
+import TabelaMarcacao from './TabelaMarcacao'
+import TabelaPosicoes from './TabelaPosicoes'
 import TabelaRastreabilidade from './TabelaRastreabilidade'
 import { Kpi } from './Kpis'
 import {
@@ -227,10 +230,25 @@ export default function AbaRastreabilidade({ dados }) {
       <GraficoProjecao rastreabilidade={rast} />
       <GraficoPosse rastreabilidade={rast} />
       <GraficoValorizacao rastreabilidade={rast} />
+
+      {/* Da carteira de hoje para trás: como o book se divide, o que cada
+          posição rendeu desde a compra, as posições da análise e a marcação a
+          mercado. Os quatro descrevem o mesmo book em graus de detalhe
+          crescentes, e ficam juntos para serem lidos em sequência. */}
+      {classe === 'consolidado' && <Composicao composicao={dados.composicao} />}
+
       <TabelaRastreabilidade
         rastreabilidade={rast}
         mostrarClasse={classe === 'consolidado'}
       />
+
+      {classe !== 'renda-fixa' && (
+        <TabelaPosicoes dados={dados} consolidado={classe === 'consolidado'} />
+      )}
+
+      {dados.marcacao && (
+        <TabelaMarcacao marcacao={dados.marcacao} avisos={dados.avisos} />
+      )}
     </>
   )
 }

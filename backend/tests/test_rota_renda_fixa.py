@@ -63,7 +63,7 @@ def test_rota_entrega_todos_os_campos_da_marcacao(cliente):
     ).json()["posicoes"][0]
 
     assert set(linha) == {
-        "id", "tipo", "tipo_slug", "vencimento", "quantidade",
+        "id", "tipo", "tipo_slug", "codigo", "rotulo", "vencimento", "quantidade",
         "data_aquisicao", "pu_aquisicao", "pu_estimado", "data_pu_aquisicao",
         "pu_marcacao", "data_base", "valor_aquisicao", "valor_marcado",
         "pnl_reais", "pnl_percentual", "peso",

@@ -24,7 +24,7 @@ import pandas as pd
 
 from . import risco_retorno as rr
 from .analise import METODOS
-from .titulos_publicos import serie_pu, universo
+from .titulos_publicos import codigo_oficial, rotulo_oficial, serie_pu, universo
 from .var_core import resumo_violacoes, retorno_carteira, retornos_simples
 
 # abaixo disso nao ha o que estimar: e o mesmo piso que `data.py` impoe as acoes
@@ -97,6 +97,10 @@ def _marca_posicao(
         "id": papel["id"],
         "tipo": papel["tipo"],
         "tipo_slug": papel["tipo_slug"],
+        # o codigo oficial (LTN, NTN-F, LFT) e como a mesa chama o papel; o nome
+        # comercial do Tesouro fica ao lado, mas nao e o que identifica na tela
+        "codigo": codigo_oficial(papel["tipo"]),
+        "rotulo": rotulo_oficial(papel["tipo"], papel["vencimento"]),
         "vencimento": papel["vencimento"].strftime("%Y-%m-%d"),
         "quantidade": round(quantidade, 4),
         "data_aquisicao": data_aquisicao.strftime("%Y-%m-%d"),

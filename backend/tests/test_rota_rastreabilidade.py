@@ -299,6 +299,30 @@ def test_valor_da_posicao_em_renda_fixa_e_quantidade_vezes_pu(cliente):
     assert linha["valor_compra"] == pytest.approx(10.0 * 3000.0, abs=0.02)
 
 
+def test_rotulo_do_titulo_e_o_codigo_oficial_e_nao_o_nome_comercial(cliente):
+    """Na mesa o papel e 'LTN 29', nao 'Tesouro Prefixado' nem o slug."""
+    rast = cliente.post(
+        "/api/analise/renda-fixa", json=pedido_renda_fixa()
+    ).json()["rastreabilidade"]
+    por_id = {p["id"]: p for p in rast["posicoes"]}
+
+    assert por_id[PREFIXADO]["rotulo"] == "LTN 29"
+    assert por_id[IPCA]["rotulo"] == "NTN-B Principal 35"
+    assert all("tesouro" not in p["rotulo"].lower() for p in rast["posicoes"])
+
+
+def test_marcacao_expoe_codigo_e_rotulo_do_papel(cliente):
+    linhas = cliente.post(
+        "/api/analise/renda-fixa", json=pedido_renda_fixa()
+    ).json()["marcacao"]["posicoes"]
+    por_id = {l["id"]: l for l in linhas}
+
+    assert por_id[PREFIXADO]["codigo"] == "LTN"
+    assert por_id[PREFIXADO]["rotulo"] == "LTN 29"
+    # o nome comercial continua no payload, em campo proprio
+    assert por_id[PREFIXADO]["tipo"] == "Tesouro Prefixado"
+
+
 def test_renda_fixa_traz_o_papel_no_detalhe(cliente):
     rast = cliente.post(
         "/api/analise/renda-fixa", json=pedido_renda_fixa()

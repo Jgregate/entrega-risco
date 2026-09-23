@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { analisar, analisarConsolidado, analisarRendaFixa } from './api'
 import logo from './assets/logo.png'
 import AbaBook from './components/AbaBook'
@@ -171,6 +171,22 @@ export default function App() {
   // a resposta de ações não traz `classe`; a de renda fixa traz
   const classeDosDados = dados?.classe ?? 'acoes'
 
+  /**
+   * Os papéis do cabeçalho pelo código oficial — 'LTN 29', 'NTN-F 31' — que é
+   * como a mesa chama o título. As chaves de `parametros.pesos` são os
+   * identificadores internos ('tesouro_prefixado_2029-01-01'), úteis para casar
+   * séries e inúteis para ler: no consolidado a marcação é quem traduz cada id
+   * para o código, e o ticker de ação passa direto.
+   */
+  const rotulosDoTopo = useMemo(() => {
+    if (!dados) return []
+    const porId = new Map(
+      (dados.marcacao?.posicoes ?? []).map((p) => [p.id, p.rotulo])
+    )
+    if (classeDosDados === 'renda-fixa') return [...porId.values()]
+    return Object.keys(dados.parametros.pesos).map((k) => porId.get(k) ?? k)
+  }, [dados, classeDosDados])
+
   const fim = dados?.parametros?.fim
   const corte = dataDeCorte(fim, janelaAnos)
   const anosDisponiveis = dados
@@ -202,11 +218,7 @@ export default function App() {
         </div>
         {dados && (
           <p className="subtitulo">
-            {classeDosDados === 'renda-fixa'
-              ? dados.marcacao.posicoes
-                  .map((p) => `${p.tipo} ${p.vencimento.slice(0, 4)}`)
-                  .join(' · ')
-              : Object.keys(dados.parametros.pesos).join(' · ')}
+            {rotulosDoTopo.join(' · ')}
             <br />
             {rotuloConfianca(dados.parametros.confianca)} · {dados.parametros.horizonte_dias}d ·
             janela {dados.parametros.janela_backtest} · {dataCurta(dados.parametros.inicio)} a{' '}
@@ -239,7 +251,6 @@ export default function App() {
             setClasse={setClasse}
             onCalcular={calcular}
             carregando={carregando}
-            dados={dados}
           />
         )}
 

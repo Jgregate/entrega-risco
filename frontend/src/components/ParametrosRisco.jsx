@@ -88,17 +88,34 @@ export default function ParametrosRisco({
         </div>
       </div>
 
-      <div className="campo">
-        <label>Janela do backtest (pregões)</label>
-        <input
-          type="number"
-          min="30"
-          max="1500"
-          step="21"
-          value={params.janela}
-          onChange={(e) => atualizar('janela', Number(e.target.value))}
-        />
+      <div className="dupla">
+        <div className="campo">
+          <label>Janela do backtest (pregões)</label>
+          <input
+            type="number"
+            min="30"
+            max="1500"
+            step="21"
+            value={params.janela}
+            onChange={(e) => atualizar('janela', Number(e.target.value))}
+          />
+        </div>
+        <div className="campo">
+          <label>Projeção (pregões)</label>
+          <input
+            type="number"
+            min="1"
+            max="252"
+            step="21"
+            value={params.horizonte_projecao}
+            onChange={(e) => atualizar('horizonte_projecao', Number(e.target.value))}
+          />
+        </div>
       </div>
+      <p className="legenda-mini">
+        A projeção é independente do horizonte do VaR: 21 pregões ≈ um mês, 252 ≈ um ano. Ela
+        alimenta a aba <strong>Rastreabilidade</strong>.
+      </p>
 
       <div className="separador" />
 

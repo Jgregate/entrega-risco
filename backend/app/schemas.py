@@ -10,6 +10,22 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class Posicao(BaseModel):
     ticker: str = Field(..., description="Codigo no yfinance, ex.: PETR4.SA, AAPL")
     peso: float = Field(..., gt=0, description="Peso relativo na carteira")
+    data_compra: date | None = Field(
+        None,
+        description=(
+            "Quando a posicao foi comprada. Alimenta a rastreabilidade "
+            "('comprei ha X dias, quanto valorizou'). Omitida, a posicao e "
+            "tratada como comprada na primeira data da serie."
+        ),
+    )
+    preco_compra: float | None = Field(
+        None,
+        gt=0,
+        description=(
+            "Preco pago por acao. Omitido, cai para o fechamento ajustado da "
+            "data de compra e a linha sai marcada como estimada."
+        ),
+    )
 
     @field_validator("ticker")
     @classmethod
@@ -19,6 +35,12 @@ class Posicao(BaseModel):
             raise ValueError("Ticker vazio.")
         return v
 
+    @model_validator(mode="after")
+    def _valida_compra(self) -> "Posicao":
+        if self.data_compra and self.data_compra > date.today():
+            raise ValueError("A data de compra nao pode estar no futuro.")
+        return self
+
 
 class PedidoVaR(BaseModel):
     posicoes: list[Posicao] = Field(..., min_length=1, max_length=20)
@@ -27,6 +49,15 @@ class PedidoVaR(BaseModel):
     confianca: float = Field(0.95, gt=0.5, lt=0.9999)
     horizonte: int = Field(1, ge=1, le=60, description="Horizonte do VaR em pregoes")
     janela: int = Field(252, ge=30, le=1500, description="Janela movel do backtest")
+    horizonte_projecao: int = Field(
+        21,
+        ge=1,
+        le=252,
+        description=(
+            "Pregoes a frente na projecao da aba de rastreabilidade. 21 = um "
+            "mes de pregoes. Independente de `horizonte`, que e do VaR."
+        ),
+    )
     valor_carteira: float = Field(100_000.0, gt=0)
     selic_anual: float | None = Field(
         None,
@@ -111,6 +142,12 @@ class ParametrosRisco(BaseModel):
     confianca: float = Field(0.95, gt=0.5, lt=0.9999)
     horizonte: int = Field(1, ge=1, le=60, description="Horizonte do VaR em pregoes")
     janela: int = Field(252, ge=30, le=1500, description="Janela movel do backtest")
+    horizonte_projecao: int = Field(
+        21,
+        ge=1,
+        le=252,
+        description="Pregoes a frente na projecao da aba de rastreabilidade.",
+    )
     inicio: date | None = Field(None, description="Se omitido, usa o historico inteiro")
     fim: date | None = None
     selic_anual: float | None = Field(None, gt=0, lt=1)

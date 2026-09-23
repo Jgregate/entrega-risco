@@ -27,7 +27,10 @@ export default function PainelParametros({
     }))
 
   const adicionar = () =>
-    setParams((p) => ({ ...p, posicoes: [...p.posicoes, { ticker: '', peso: 10 }] }))
+    setParams((p) => ({
+      ...p,
+      posicoes: [...p.posicoes, { ticker: '', peso: 10, data_compra: '', preco_compra: '' }],
+    }))
 
   const remover = (i) =>
     setParams((p) => ({ ...p, posicoes: p.posicoes.filter((_, j) => j !== i) }))
@@ -45,14 +48,22 @@ export default function PainelParametros({
           Tickers do yfinance — ações da B3 usam sufixo <strong>.SA</strong>. O peso é relativo:
           a soma é normalizada para 100% e o valor nominal sai da fatia sobre o total da carteira.
         </p>
+        <p className="legenda">
+          <strong>Compra</strong> e <strong>preço pago</strong> são opcionais e alimentam a aba{' '}
+          <strong>Rastreabilidade</strong> — é o que permite responder “comprei há quantos dias, e
+          quanto valorizou”. Sem a data, a posição é tratada como comprada no início do período;
+          sem o preço, ele é estimado pelo fechamento daquele dia.
+        </p>
 
         <table className="tabela-book">
           <thead>
             <tr>
               <th>Ativo</th>
-              <th style={{ width: 96 }}>Peso</th>
-              <th style={{ width: 128, textAlign: 'right' }}>Valor nominal</th>
-              <th style={{ width: 74, textAlign: 'right' }}>Part.</th>
+              <th style={{ width: 72 }}>Peso</th>
+              <th style={{ width: 134 }}>Compra</th>
+              <th style={{ width: 96 }}>Preço pago</th>
+              <th style={{ width: 120, textAlign: 'right' }}>Valor nominal</th>
+              <th style={{ width: 62, textAlign: 'right' }}>Part.</th>
               <th style={{ width: 38 }} />
             </tr>
           </thead>
@@ -75,6 +86,24 @@ export default function PainelParametros({
                     onChange={(e) => atualizarPosicao(i, 'peso', e.target.value)}
                   />
                 </td>
+                <td>
+                  <input
+                    type="date"
+                    max={params.fim}
+                    value={pos.data_compra || ''}
+                    onChange={(e) => atualizarPosicao(i, 'data_compra', e.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="—"
+                    value={pos.preco_compra ?? ''}
+                    onChange={(e) => atualizarPosicao(i, 'preco_compra', e.target.value)}
+                  />
+                </td>
                 <td className="num destaque-suave">{brl(nominal(pos.peso))}</td>
                 <td className="num">
                   {somaPesos > 0 ? pct((Number(pos.peso) || 0) / somaPesos, 1) : '—'}
@@ -94,7 +123,7 @@ export default function PainelParametros({
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={2}>Total</td>
+              <td colSpan={4}>Total</td>
               <td className="num">{brl(Number(params.valor_carteira))}</td>
               <td className="num">100%</td>
               <td />

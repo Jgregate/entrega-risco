@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import ParametrosRisco from './ParametrosRisco'
 import { titulosDisponiveis } from '../api'
-import { brl, dataCurta, num, pct } from '../formato'
+import { brl, dataCurta, haQuantoTempo, num, pct } from '../formato'
+
+/** Dias corridos entre a data informada e hoje, sem passar pelo backend. */
+const diasDePosse = (iso) =>
+  Math.max(0, Math.round((Date.now() - new Date(`${iso}T00:00:00`)) / 86_400_000))
 
 /**
  * A taxa do Tesouro Selic no arquivo é o SPREAD sobre a Selic, não um
@@ -26,6 +30,7 @@ export default function BookRendaFixa({
   const [escolhido, setEscolhido] = useState('')
   const [quantidade, setQuantidade] = useState(1)
   const [puAquisicao, setPuAquisicao] = useState('')
+  const [dataAquisicao, setDataAquisicao] = useState('')
 
   const posicoes = params.rendaFixa
 
@@ -83,12 +88,16 @@ export default function BookRendaFixa({
           titulo_id: escolhido,
           quantidade: Number(quantidade),
           pu_aquisicao: Number(puAquisicao),
+          // omitida, a marcação trata a posição como montada na data base e o
+          // P&L nasce zerado — é o comportamento de quem está comprando agora
+          ...(dataAquisicao ? { data_aquisicao: dataAquisicao } : {}),
         },
       ],
     }))
     setEscolhido('')
     setQuantidade(1)
     setPuAquisicao('')
+    setDataAquisicao('')
   }
 
   const remover = (i) =>
@@ -187,6 +196,34 @@ export default function BookRendaFixa({
               </div>
             </div>
 
+            <div className="dupla">
+              <div className="campo">
+                <label>Data de aquisição</label>
+                <input
+                  type="date"
+                  max={dataBase || undefined}
+                  value={dataAquisicao}
+                  onChange={(e) => setDataAquisicao(e.target.value)}
+                />
+              </div>
+              <div className="campo">
+                <label>Tempo de posse</label>
+                <input
+                  className="travado"
+                  readOnly
+                  tabIndex={-1}
+                  value={dataAquisicao ? haQuantoTempo(diasDePosse(dataAquisicao)) : '—'}
+                />
+              </div>
+            </div>
+
+            <p className="legenda-mini">
+              A data de aquisição alimenta a aba <strong>Rastreabilidade</strong>: é ela que
+              responde “comprei este título há quantos dias, quanto ele valorizou e qual a
+              projeção”. Sem ela, a posição é tratada como montada na data base e o P&amp;L nasce
+              zerado.
+            </p>
+
             <button className="btn-texto" onClick={adicionar} disabled={!podeAdicionar}>
               + adicionar ao book
             </button>
@@ -198,9 +235,10 @@ export default function BookRendaFixa({
             <thead>
               <tr>
                 <th>Papel</th>
-                <th style={{ width: 78, textAlign: 'right' }}>Qtde.</th>
-                <th style={{ width: 104 }}>Vencimento</th>
-                <th style={{ width: 96, textAlign: 'right' }}>PU aquis.</th>
+                <th style={{ width: 70, textAlign: 'right' }}>Qtde.</th>
+                <th style={{ width: 96 }}>Vencimento</th>
+                <th style={{ width: 96 }}>Aquisição</th>
+                <th style={{ width: 92, textAlign: 'right' }}>PU aquis.</th>
                 <th style={{ width: 38 }} />
               </tr>
             </thead>
@@ -217,6 +255,9 @@ export default function BookRendaFixa({
                     </td>
                     <td className="num">{num(pos.quantidade)}</td>
                     <td className="num">{t ? dataCurta(t.vencimento) : '—'}</td>
+                    <td className="num">
+                      {pos.data_aquisicao ? dataCurta(pos.data_aquisicao) : 'data base'}
+                    </td>
                     <td className="num">{brl(pos.pu_aquisicao, 2)}</td>
                     <td>
                       <button

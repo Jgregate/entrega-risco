@@ -3,13 +3,14 @@
 Aplicação de risco de carteira com ações (preços do `yfinance`), títulos públicos (preços do
 Tesouro Transparente) e taxa livre de risco do Banco Central. Célula de Risco — Inteli Finance.
 
-Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em quatro abas:
+Backend em **FastAPI/Python**, front em **React (Vite)**, organizado em cinco abas:
 
 | Aba | O que traz |
 |---|---|
 | **VaRs** | Os três métodos lado a lado — empírico, paramétrico e EWMA — com as curvas no tempo, distribuição, histórico de violações, violações por ano, teste de aderência e evolução da carteira. |
 | **Risco e retorno** | Sharpe e Sortino contra a Selic, curva da carteira vs. Selic, índices móveis e drawdown. |
 | **Book** | Onde a carteira é montada e todos os parâmetros são manipulados. Um seletor **Ações \| Renda Fixa \| Ambos** escolhe a classe: em ações, ativos, peso e valor nominal; em renda fixa, títulos do Tesouro Direto com quantidade, data e PU de aquisição, e a marcação a mercado com P&L; em ambos, os dois books na mesma análise. Período, confiança, horizonte e janela do backtest valem para todas. |
+| **Rastreabilidade** | Da compra até a projeção. Responde “comprei há X dias, quanto valorizou ou desvalorizou, e qual a projeção” para cada posição e para o book inteiro — nas três classes. Traço por posição: data e preço de compra, tempo de posse em dias corridos e em pregões, valorização em reais, em percentual e anualizada, pico, fundo e queda desde o pico. Projeção: valor esperado pela deriva da janela e piso/teto pelos três VaRs, com o nível de confiabilidade declarado. Portada do playground `Playground-Portifolio-Finance` (Streamlit), reescrita nesta arquitetura. |
 | **Fundos** | Busca (ou Top 10 por retorno) entre fundos de investimento ativos na CVM, com crescimento acumulado vs. CDI, heatmap de retornos mensais, comparativo com Ibovespa e Sharpe/Sortino por janela. Integração do antigo sistema FUNDOS (Streamlit), reescrito nesta arquitetura — ver seção própria abaixo. |
 
 ---
@@ -294,6 +295,7 @@ backend/
     analise.py         orquestra o payload das três abas
     titulos_publicos.py  CSV do Tesouro: download, cache 12 h, parsing, universo disponível
     renda_fixa.py      marcação a mercado, matriz de PUs, métricas por título, avisos, consolidado
+    rastreabilidade.py posse desde a compra, projeção no horizonte e confiabilidade da janela
     fundos/
       cvm_data.py      registro, cotas mensais, CDI, Ibovespa (cache SQLite em backend/data/)
       metrics.py       retorno, vol., Sharpe, Sortino de um fundo
@@ -313,6 +315,11 @@ frontend/
       TabelaMarcacao.jsx marcação a mercado e P&L
       ParametrosRisco.jsx parâmetros compartilhados pelas duas classes
       AbaFundos.jsx      busca, Top 10 e análise de fundos da CVM
+      AbaRastreabilidade.jsx  posse, valorização e projeção nas três classes
+      TabelaRastreabilidade.jsx  uma linha por posição, da compra à projeção
+      GraficoProjecao.jsx  realizado + cone de projeção
+      GraficoPosse.jsx     valor do book desde a compra
+      GraficoValorizacao.jsx  valorização por posição
 ```
 
 ### Contrato entre os métodos de VaR

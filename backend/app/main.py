@@ -12,6 +12,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import rastreabilidade as rast
 from . import renda_fixa as rf
 from . import risco_retorno as rr
 from . import titulos_publicos as tp
@@ -199,12 +200,13 @@ def _bloco_risco_retorno(
 def analise(pedido: PedidoVaR) -> dict:
     """Payload completo: os tres VaRs, o book e a relacao risco-retorno."""
     precos = _carrega_precos(pedido)
-    ret_carteira = retorno_carteira(retornos_simples(precos), pedido.pesos_normalizados())
+    pesos = pedido.pesos_normalizados()
+    ret_carteira = retorno_carteira(retornos_simples(precos), pesos)
     bloco, _ = _bloco_risco_retorno(ret_carteira, pedido.janela, pedido.selic_anual)
     try:
-        return analisar(
+        saida = analisar(
             precos=precos,
-            pesos=pedido.pesos_normalizados(),
+            pesos=pesos,
             confianca=pedido.confianca,
             horizonte=pedido.horizonte,
             janela=pedido.janela,
@@ -215,6 +217,16 @@ def analise(pedido: PedidoVaR) -> dict:
         raise
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Falha no calculo: {exc}") from exc
+
+    saida["rastreabilidade"] = rast.rastrear_book(
+        precos,
+        rast.posicoes_de_acoes(precos, pedido.posicoes, pesos, pedido.valor_carteira),
+        confianca=pedido.confianca,
+        horizonte_projecao=pedido.horizonte_projecao,
+        janela=pedido.janela,
+        pesos=pesos,
+    )
+    return saida
 
 
 @app.post("/api/analise/renda-fixa", tags=["renda fixa"])
@@ -275,10 +287,21 @@ def analise_renda_fixa(pedido: PedidoAnaliseRendaFixa) -> dict:
     )
     avisos = preparado["avisos"] + avisos_titulos + avisos_book
 
+    # a matriz completa (sem dropna) preserva o historico proprio de cada papel,
+    # que e o que a rastreabilidade de uma posicao individual precisa ver
+    saida["rastreabilidade"] = rast.rastrear_book(
+        matriz,
+        rast.posicoes_de_renda_fixa(matriz, preparado["marcacao"]),
+        confianca=pedido.confianca,
+        horizonte_projecao=pedido.horizonte_projecao,
+        janela=pedido.janela,
+        pesos=pesos,
+    )
+
     saida["classe"] = "renda-fixa"
     saida["marcacao"] = preparado["marcacao"]
     saida["por_titulo"] = por_titulo
-    saida["avisos"] = avisos
+    saida["avisos"] = avisos + saida["rastreabilidade"]["avisos"]
     saida["fonte"] = historico.meta()
     return saida
 
@@ -324,7 +347,7 @@ def analise_consolidada(pedido: PedidoConsolidado) -> dict:
 
     matriz = junto["matriz"].dropna(how="any")
     ret_carteira = retorno_carteira(retornos_simples(matriz), junto["pesos"])
-    bloco, _ = _bloco_risco_retorno(ret_carteira, pedido.janela, pedido.selic_anual)
+    bloco, selic = _bloco_risco_retorno(ret_carteira, pedido.janela, pedido.selic_anual)
 
     try:
         saida = analisar(
@@ -339,8 +362,33 @@ def analise_consolidada(pedido: PedidoConsolidado) -> dict:
     except Exception as exc:  # pragma: no cover
         raise HTTPException(status_code=500, detail=f"Falha no calculo: {exc}") from exc
 
+    # a rastreabilidade do consolidado roda sobre a matriz das DUAS classes nas
+    # datas em comum — a mesma que alimentou o VaR acima. E por isso que a data
+    # de referencia dela pode ser anterior a data base da marcacao: o book
+    # consolidado so existe onde a bolsa e o Tesouro publicaram no mesmo dia.
+    saida["rastreabilidade"] = rast.rastrear_book(
+        matriz,
+        rast.posicoes_de_acoes(
+            matriz, pedido.acoes, pedido.pesos_acoes(), pedido.valor_carteira
+        )
+        + rast.posicoes_de_renda_fixa(matriz, preparado["marcacao"]),
+        confianca=pedido.confianca,
+        horizonte_projecao=pedido.horizonte_projecao,
+        janela=pedido.janela,
+        pesos=junto["pesos"],
+    )
+
+    # as metricas da marcacao a mercado, papel por papel, tambem no consolidado:
+    # o peso de cada titulo aqui e sobre o book inteiro, mas o risco isolado do
+    # papel e o mesmo — e e ele que diz qual perna esta carregando a volatilidade
+    por_titulo, avisos_titulos = rf.metricas_por_titulo(
+        preparado["matriz"], preparado["marcacao"], selic,
+        pedido.confianca, pedido.horizonte, pedido.janela,
+    )
+
     saida["classe"] = "consolidado"
     saida["marcacao"] = preparado["marcacao"]
+    saida["por_titulo"] = por_titulo
     saida["composicao"] = {
         "valor_acoes": junto["valor_acoes"],
         "valor_renda_fixa": junto["valor_renda_fixa"],
@@ -348,11 +396,16 @@ def analise_consolidada(pedido: PedidoConsolidado) -> dict:
         "peso_acoes": round(junto["valor_acoes"] / junto["valor_total"], 6),
         "peso_renda_fixa": round(junto["valor_renda_fixa"] / junto["valor_total"], 6),
     }
-    saida["avisos"] = junto["avisos"] + rf.avisos_do_backtest(
-        saida["metodos"]["empirico"]["backtest"]["resumo"],
-        pedido.confianca,
-        pedido.janela,
-        len(ret_carteira),
+    saida["avisos"] = (
+        junto["avisos"]
+        + avisos_titulos
+        + rf.avisos_do_backtest(
+            saida["metodos"]["empirico"]["backtest"]["resumo"],
+            pedido.confianca,
+            pedido.janela,
+            len(ret_carteira),
+        )
+        + saida["rastreabilidade"]["avisos"]
     )
     saida["fonte"] = historico.meta()
     return saida

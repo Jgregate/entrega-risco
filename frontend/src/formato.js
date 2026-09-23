@@ -52,3 +52,32 @@ export const COR_SERIE_FUNDO = {
   cdi: CORES.branco,
   ibovespa: CORES.vermelhoMedio,
 }
+
+// séries da aba Rastreabilidade: o realizado em branco (é fato), o projetado
+// em vermelho (é estimativa) — a distinção visual entre os dois é a leitura
+// mais importante do gráfico
+export const COR_SERIE_RASTREIO = {
+  realizado: CORES.branco,
+  esperado: CORES.vermelhoClaro,
+  banda: CORES.vermelho,
+}
+
+/** "há 412 dias" — o tempo de posse escrito como se lê em voz alta. */
+export const haQuantoTempo = (dias) => {
+  if (dias === null || dias === undefined) return '—'
+  if (dias === 0) return 'hoje'
+  if (dias === 1) return 'há 1 dia'
+  if (dias < 60) return `há ${dias} dias`
+  const meses = Math.round(dias / 30.44)
+  if (dias < 730) return `há ${dias} dias · ~${meses} ${meses === 1 ? 'mês' : 'meses'}`
+  const anos = (dias / 365.25).toFixed(1).replace('.', ',')
+  return `há ${dias} dias · ~${anos} anos`
+}
+
+// nível de confiabilidade da projeção -> como o selo aparece
+export const SELO_CONFIABILIDADE = {
+  SAUDAVEL: 'ok',
+  REDUZIDA: 'ok',
+  BAIXA: 'falha',
+  CRITICA: 'falha',
+}

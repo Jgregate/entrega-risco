@@ -3,6 +3,7 @@ import { analisar, analisarConsolidado, analisarRendaFixa } from './api'
 import logo from './assets/logo.png'
 import AbaBook from './components/AbaBook'
 import AbaFundos from './components/AbaFundos'
+import AbaRastreabilidade from './components/AbaRastreabilidade'
 import AbaRiscoRetorno from './components/AbaRiscoRetorno'
 import GraficoComparacaoVaR from './components/GraficoComparacaoVaR'
 import GraficoDistribuicao from './components/GraficoDistribuicao'
@@ -23,9 +24,9 @@ const anosAtras = (n) => {
 
 const PADRAO = {
   posicoes: [
-    { ticker: 'PETR4.SA', peso: 40 },
-    { ticker: 'VALE3.SA', peso: 35 },
-    { ticker: 'ITUB4.SA', peso: 25 },
+    { ticker: 'PETR4.SA', peso: 40, data_compra: iso(anosAtras(2)), preco_compra: '' },
+    { ticker: 'VALE3.SA', peso: 35, data_compra: iso(anosAtras(1)), preco_compra: '' },
+    { ticker: 'ITUB4.SA', peso: 25, data_compra: '', preco_compra: '' },
   ],
   rendaFixa: [],
   inicio: iso(anosAtras(5)),
@@ -33,6 +34,7 @@ const PADRAO = {
   confianca: 0.95,
   horizonte: 1,
   janela: 252,
+  horizonte_projecao: 21,
   valor_carteira: 100000,
 }
 
@@ -46,6 +48,7 @@ const ABAS = [
   { id: 'vars', titulo: 'VaRs', sub: 'empírico · paramétrico · EWMA' },
   { id: 'risco', titulo: 'Risco e retorno', sub: 'Sharpe · Sortino' },
   { id: 'book', titulo: 'Book', sub: 'carteira e parâmetros' },
+  { id: 'rastreio', titulo: 'Rastreabilidade', sub: 'posse · valorização · projeção' },
   { id: 'fundos', titulo: 'Fundos', sub: 'CVM · fundos de investimento' },
 ]
 
@@ -128,11 +131,16 @@ export default function App() {
       confianca: params.confianca,
       horizonte: Number(params.horizonte),
       janela: Number(params.janela),
+      horizonte_projecao: Number(params.horizonte_projecao),
     }
     try {
+      // data e preço de compra são opcionais: campo vazio não vai no payload,
+      // e o backend então trata a posição como comprada no início da série
       const acoes = params.posicoes.map((p) => ({
         ticker: p.ticker.trim().toUpperCase(),
         peso: Number(p.peso),
+        ...(p.data_compra ? { data_compra: p.data_compra } : {}),
+        ...(Number(p.preco_compra) > 0 ? { preco_compra: Number(p.preco_compra) } : {}),
       }))
       const resposta =
         classe === 'acoes'
@@ -266,6 +274,8 @@ export default function App() {
           ) : (
             semDados
           ))}
+
+        {aba === 'rastreio' && (dados ? <AbaRastreabilidade dados={dados} /> : semDados)}
 
         {aba === 'fundos' && <AbaFundos />}
       </main>

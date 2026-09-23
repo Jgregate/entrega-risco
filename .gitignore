@@ -8,3 +8,4 @@ dist/
 backend/data/
 /package-lock.json
 .claude/
+.cache/

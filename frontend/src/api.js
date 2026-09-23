@@ -1,29 +1,32 @@
 const BASE = import.meta.env.VITE_API_URL || ''
 
-async function checaResposta(resp) {
-  if (resp.ok) return resp.json()
-  let detalhe = `Erro ${resp.status}`
-  try {
-    const json = await resp.json()
-    if (typeof json.detail === 'string') detalhe = json.detail
-    else if (Array.isArray(json.detail)) detalhe = json.detail.map((d) => d.msg).join(' · ')
-  } catch {
-    /* resposta sem corpo JSON */
+async function trata(resp) {
+  if (!resp.ok) {
+    let detalhe = `Erro ${resp.status}`
+    try {
+      const json = await resp.json()
+      if (typeof json.detail === 'string') detalhe = json.detail
+      else if (Array.isArray(json.detail)) detalhe = json.detail.map((d) => d.msg).join(' · ')
+    } catch {
+      /* resposta sem corpo JSON */
+    }
+    throw new Error(detalhe)
   }
-  throw new Error(detalhe)
+  return resp.json()
 }
 
 async function post(rota, corpo) {
-  const resp = await fetch(`${BASE}${rota}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(corpo),
-  })
-  return checaResposta(resp)
+  return trata(
+    await fetch(`${BASE}${rota}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    })
+  )
 }
 
 async function get(rota) {
-  return checaResposta(await fetch(`${BASE}${rota}`))
+  return trata(await fetch(`${BASE}${rota}`))
 }
 
 /** Payload completo: os três VaRs, o book e a relação risco-retorno. */
@@ -31,6 +34,15 @@ export const analisar = (pedido) => post('/api/analise', pedido)
 
 /** Somente o VaR empírico — contrato antigo, mantido para integrações. */
 export const calcularVaREmpirico = (pedido) => post('/api/var/empirico', pedido)
+
+/** Universo do Tesouro Direto no último dia útil publicado. */
+export const titulosDisponiveis = () => get('/api/titulos-publicos/disponiveis')
+
+/** Mesmo contrato de `analisar`, com marcação a mercado e avisos por cima. */
+export const analisarRendaFixa = (pedido) => post('/api/analise/renda-fixa', pedido)
+
+/** Os dois books na mesma análise, ponderados por valor de mercado. */
+export const analisarConsolidado = (pedido) => post('/api/analise/consolidado', pedido)
 
 /** Fundos ativos na CVM cujo nome contém `q`. */
 export const buscarFundos = (q) => get(`/api/fundos/buscar?q=${encodeURIComponent(q)}`)

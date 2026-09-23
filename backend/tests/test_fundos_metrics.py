@@ -133,3 +133,24 @@ def test_ranking_ordena_por_retorno_decrescente_e_respeita_top_n():
 
     assert list(resultado["cnpj_fmt"]) == ["22.222.222/0001-22", "33.333.333/0001-33"]
     assert len(resultado) == 2
+
+
+def test_ranking_descarta_retorno_infinito_de_cota_inicial_zerada():
+    """Cota inicial zerada gera retorno infinito e encabecaria o ranking com
+    um numero que nao existe."""
+    quotas = pd.DataFrame(
+        {"m0": [0.0, 10.0, 10.0], "m1": [5.0, 20.0, 11.0]},
+        index=["00.000.000/0001-00", "11.111.111/0001-11", "22.222.222/0001-22"],
+    )
+    snap = pd.DataFrame(
+        {"VL_PATRIM_LIQ": [1e6] * 3, "NR_COTST": [500] * 3}, index=quotas.index
+    )
+    registry = pd.DataFrame(
+        {"cnpj_fmt": list(quotas.index), "Denominacao_Social": ["A", "B", "C"]}
+    )
+
+    saida = _ranking_a_partir_de(quotas, snap, registry, 100, 200.0, 10)
+
+    assert "00.000.000/0001-00" not in set(saida["cnpj_fmt"])
+    assert saida.iloc[0]["cnpj_fmt"] == "11.111.111/0001-11"  # +100%
+    assert all(saida["retorno_%"].map(lambda v: v == v and abs(v) != float("inf")))

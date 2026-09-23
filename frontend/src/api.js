@@ -14,36 +14,74 @@ async function checaResposta(resp) {
 }
 
 async function post(rota, corpo) {
-  const resp = await fetch(`${BASE}${rota}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(corpo),
-  })
-  return checaResposta(resp)
+  return checaResposta(
+    await fetch(`${BASE}${rota}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(corpo),
+    })
+  )
 }
 
-async function get(rota) {
-  return checaResposta(await fetch(`${BASE}${rota}`))
+async function get(rota, params) {
+  const busca = params ? `?${new URLSearchParams(params)}` : ''
+  return checaResposta(await fetch(`${BASE}${rota}${busca}`))
 }
 
-/** Payload completo: os três VaRs, o book e a relação risco-retorno. */
-export const analisar = (pedido) => post('/api/analise', pedido)
+/* --------------------------- catálogo ----------------------------- */
 
-/** Somente o VaR empírico — contrato antigo, mantido para integrações. */
-export const calcularVaREmpirico = (pedido) => post('/api/var/empirico', pedido)
+/**
+ * Períodos rápidos da interface — vêm do backend para as telas não divergirem.
+ * `escopo: 'ranking'` traz só as janelas que o ranking consegue calcular.
+ */
+export const listarPeriodos = (escopo) =>
+  get('/api/fundos/periodos', escopo ? { escopo } : undefined)
 
-/** Fundos ativos na CVM cujo nome contém `q`. */
-export const buscarFundos = (q) => get(`/api/fundos/buscar?q=${encodeURIComponent(q)}`)
+/** Categorias de fundo oferecidas como filtro do ranking. */
+export const listarCategorias = () => get('/api/fundos/categorias')
 
-/** Top 10 fundos por retorno acumulado nos últimos `anos` anos. */
-export const top10Fundos = (anos) => get(`/api/fundos/top10?anos=${anos}`)
+/** Benchmarks que o sistema sabe buscar (CDI, Ibovespa, IPCA, Selic...). */
+export const listarBenchmarks = () => get('/api/fundos/benchmarks')
 
-/** Métricas, série mensal e comparativo de um fundo (CNPJ formatado). */
-export const analiseFundo = (cnpj, meses) =>
-  get(`/api/fundos/analise?cnpj=${encodeURIComponent(cnpj)}&meses=${meses}`)
-
-/** Data/hora do último download bem-sucedido do mês mais recente. */
+/** Data/hora do último download dos dados da CVM. */
 export const statusFundos = () => get('/api/fundos/status')
 
 /** Força a próxima consulta a reprocessar o que pode ter mudado na CVM. */
 export const atualizarFundos = () => post('/api/fundos/atualizar')
+
+/* ------------------------ análise de fundo ------------------------ */
+
+/** Busca por nome, CNPJ, código CVM ou gestora. */
+export const buscarFundos = (q) => get('/api/fundos/buscar', { q })
+
+/**
+ * Top 10 por retorno acumulado na janela escolhida — a descoberta da Visão
+ * Geral. `categoria` vazia significa "todas as categorias".
+ */
+export const top10Fundos = (periodo, categoria) =>
+  get('/api/fundos/top10', categoria ? { periodo, categoria } : { periodo })
+
+/** Informações institucionais da classe. */
+export const cadastroFundo = (cnpj) => get('/api/fundos/cadastro', { cnpj })
+
+/**
+ * Payload completo da análise individual.
+ * `opcoes` aceita `periodo`, `benchmark` e o par `inicio`/`fim` do intervalo
+ * personalizado; o que vier vazio simplesmente não entra na query.
+ */
+export const analiseFundo = (cnpj, opcoes = {}) => {
+  const params = { cnpj }
+  for (const chave of ['periodo', 'benchmark', 'inicio', 'fim']) {
+    if (opcoes[chave]) params[chave] = opcoes[chave]
+  }
+  return get('/api/fundos/analise', params)
+}
+
+/** Composição da carteira do fundo no mês mais recente do CDA. */
+export const composicaoFundo = (cnpj) => get('/api/fundos/composicao', { cnpj })
+
+/* ------------------------------ book ------------------------------ */
+
+/** Consolida as posições informadas numa carteira única. */
+export const analiseBook = (posicoes, periodo, benchmarks) =>
+  post('/api/book/analise', { posicoes, periodo, benchmarks })

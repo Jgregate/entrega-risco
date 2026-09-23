@@ -1,101 +1,90 @@
-import { useState } from 'react'
-import { analisar } from './api'
+import { useCallback, useEffect, useState } from 'react'
+import { atualizarFundos, listarBenchmarks, listarPeriodos, statusFundos } from './api'
 import logo from './assets/logo.png'
-import AbaBook from './components/AbaBook'
-import AbaFundos from './components/AbaFundos'
-import AbaRiscoRetorno from './components/AbaRiscoRetorno'
-import GraficoComparacaoVaR from './components/GraficoComparacaoVaR'
-import GraficoDistribuicao from './components/GraficoDistribuicao'
-import GraficoEvolucao from './components/GraficoEvolucao'
-import Kpis from './components/Kpis'
-import SeletorJanela from './components/SeletorJanela'
-import { Aderencia, ViolacoesPorAno } from './components/Violacoes'
-import { dataCurta, rotuloConfianca } from './formato'
-import { dataDeCorte } from './janela'
+import { carregar, salvar } from './book'
+import BuscaFundos from './components/BuscaFundos'
+import VisaoGeral from './components/VisaoGeral'
+import MeuBook from './components/book/MeuBook'
+import AnaliseFundo from './components/fundo/AnaliseFundo'
+import { Erro, Vazio } from './components/ui'
 
-const hoje = new Date()
-const iso = (d) => d.toISOString().slice(0, 10)
-const anosAtras = (n) => {
-  const d = new Date(hoje)
-  d.setFullYear(d.getFullYear() - n)
-  return d
-}
-
-const PADRAO = {
-  posicoes: [
-    { ticker: 'PETR4.SA', peso: 40 },
-    { ticker: 'VALE3.SA', peso: 35 },
-    { ticker: 'ITUB4.SA', peso: 25 },
-  ],
-  inicio: iso(anosAtras(5)),
-  fim: iso(hoje),
-  confianca: 0.95,
-  horizonte: 1,
-  janela: 252,
-  valor_carteira: 100000,
-}
-
+/**
+ * Plataforma de fundos de investimento — Inteli Finance.
+ *
+ * Três áreas, e nada além disso: a visão consolidada, a análise de um fundo e
+ * o book do usuário. O estado que atravessa as três é pequeno de propósito —
+ * o fundo aberto e as posições do book — e mora aqui, para clicar num fundo
+ * dentro do book levar direto à análise dele sem recarregar nada.
+ */
 const ABAS = [
-  { id: 'vars', titulo: 'VaRs', sub: 'empírico · paramétrico · EWMA' },
-  { id: 'risco', titulo: 'Risco e retorno', sub: 'Sharpe · Sortino' },
-  { id: 'book', titulo: 'Book', sub: 'carteira e parâmetros' },
-  { id: 'fundos', titulo: 'Fundos', sub: 'CVM · fundos de investimento' },
+  { id: 'geral', titulo: 'Visão Geral', sub: 'book e descoberta' },
+  { id: 'fundos', titulo: 'Analisar Fundos', sub: 'análise individual' },
+  { id: 'book', titulo: 'Meu Book', sub: 'carteira consolidada' },
 ]
 
 export default function App() {
-  const [params, setParams] = useState(PADRAO)
-  const [dados, setDados] = useState(null)
-  const [erro, setErro] = useState(null)
-  const [carregando, setCarregando] = useState(false)
-  const [aba, setAba] = useState('book')
-  // janela de visualização da aba de VaRs (null = histórico completo)
-  const [janelaAnos, setJanelaAnos] = useState(null)
+  const [aba, setAba] = useState('geral')
+  const [fundo, setFundo] = useState(null)
+  const [posicoes, setPosicoes] = useState(carregar)
 
-  const calcular = async () => {
-    setCarregando(true)
-    setErro(null)
-    try {
-      const resposta = await analisar({
-        posicoes: params.posicoes.map((p) => ({
-          ticker: p.ticker.trim().toUpperCase(),
-          peso: Number(p.peso),
-        })),
-        inicio: params.inicio,
-        fim: params.fim,
-        confianca: params.confianca,
-        horizonte: Number(params.horizonte),
-        janela: Number(params.janela),
-        valor_carteira: Number(params.valor_carteira),
+  const [periodos, setPeriodos] = useState(null)
+  const [benchmarks, setBenchmarks] = useState(null)
+  const [status, setStatus] = useState(null)
+  const [erroCatalogo, setErroCatalogo] = useState(null)
+  const [atualizando, setAtualizando] = useState(false)
+
+  // resumo da última consolidação, para a Visão Geral não refazer a conta
+  const [resumoBook, setResumoBook] = useState(null)
+
+  useEffect(() => {
+    Promise.all([listarPeriodos(), listarBenchmarks()])
+      .then(([p, b]) => {
+        setPeriodos(p)
+        setBenchmarks(b)
       })
-      setDados(resposta)
-      setJanelaAnos(null)
-      setAba('vars')
-    } catch (e) {
-      setErro(e.message)
-      setDados(null)
-    } finally {
-      setCarregando(false)
-    }
+      .catch((e) => setErroCatalogo(e.message))
+    statusFundos().then(setStatus).catch(() => setStatus(null))
+  }, [])
+
+  useEffect(() => {
+    salvar(posicoes)
+  }, [posicoes])
+
+  const abrirFundo = useCallback((f) => {
+    setFundo({ cnpj: f.cnpj || f.cnpj_fmt, nome: f.nome })
+    setAba('fundos')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  const adicionarAoBook = useCallback((f) => {
+    const cnpj = f.cnpj || f.cnpj_fmt
+    setPosicoes((atual) =>
+      atual.some((p) => p.cnpj === cnpj) ? atual : [...atual, { cnpj, nome: f.nome }]
+    )
+    setAba('book')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
+
+  const mudarPosicao = useCallback((indice, campo, valor) => {
+    setPosicoes((atual) =>
+      atual.map((p, i) => (i === indice ? { ...p, [campo]: valor } : p))
+    )
+  }, [])
+
+  const removerPosicao = useCallback((indice) => {
+    setPosicoes((atual) => atual.filter((_, i) => i !== indice))
+  }, [])
+
+  const atualizar = () => {
+    setAtualizando(true)
+    atualizarFundos()
+      .then(statusFundos)
+      .then(setStatus)
+      .catch(() => {})
+      .finally(() => setAtualizando(false))
   }
 
-  const fim = dados?.parametros?.fim
-  const corte = dataDeCorte(fim, janelaAnos)
-  const anosDisponiveis = dados
-    ? Math.max(
-        1,
-        Math.floor(
-          (new Date(fim) - new Date(dados.parametros.inicio)) / (365.25 * 24 * 3600 * 1000)
-        )
-      )
-    : 0
-
-  const semDados = (
-    <div className="vazio">
-      Nenhuma análise rodada ainda.
-      <br />
-      Monte a carteira na aba <strong>Book</strong> e clique em <strong>Rodar análise</strong>.
-    </div>
-  )
+  const noBook = fundo ? posicoes.some((p) => p.cnpj === fundo.cnpj) : false
 
   return (
     <div className="app">
@@ -103,26 +92,23 @@ export default function App() {
         <div className="marca">
           <img className="selo" src={logo} alt="Inteli Finance" />
           <div>
-            <div className="olho">Inteli Finance · Célula de Risco</div>
-            <h1>Painel de risco de carteira</h1>
+            <div className="olho">Inteli Finance</div>
+            <h1>Plataforma de fundos de investimento</h1>
           </div>
         </div>
-        {dados && (
-          <p className="subtitulo">
-            {Object.keys(dados.parametros.pesos).join(' · ')}
-            <br />
-            {rotuloConfianca(dados.parametros.confianca)} · {dados.parametros.horizonte_dias}d ·
-            janela {dados.parametros.janela_backtest} · {dataCurta(dados.parametros.inicio)} a{' '}
-            {dataCurta(dados.parametros.fim)}
-          </p>
-        )}
+        <p className="subtitulo">
+          Análise individual e book consolidado, sobre os dados abertos da CVM,
+          do Banco Central e do Yahoo Finance.
+        </p>
       </header>
 
       <nav className="abas">
         {ABAS.map((a) => (
           <button
             key={a.id}
+            type="button"
             className={`aba${aba === a.id ? ' ativa' : ''}`}
+            aria-current={aba === a.id ? 'page' : undefined}
             onClick={() => setAba(a.id)}
           >
             <span className="aba-titulo">{a.titulo}</span>
@@ -132,62 +118,92 @@ export default function App() {
       </nav>
 
       <main>
-        {erro && <div className="erro">{erro}</div>}
+        {erroCatalogo && (
+          <Erro>
+            Não foi possível falar com a API ({erroCatalogo}). Verifique se o backend está
+            rodando em <code>http://127.0.0.1:8000</code>.
+          </Erro>
+        )}
 
-        {aba === 'book' && (
-          <AbaBook
-            params={params}
-            setParams={setParams}
-            onCalcular={calcular}
-            carregando={carregando}
-            dados={dados}
+        {aba === 'geral' && (
+          <VisaoGeral
+            resumoBook={resumoBook}
+            temBook={posicoes.length > 0}
+            onIrParaBook={() => setAba('book')}
+            onEscolherFundo={abrirFundo}
+            status={status}
           />
         )}
 
-        {aba === 'vars' &&
-          (dados ? (
-            <>
-              <Kpis dados={dados} />
-              <SeletorJanela
-                valor={janelaAnos}
-                onMudar={setJanelaAnos}
-                disponiveis={anosDisponiveis}
-                corte={corte}
-                fim={fim}
-              />
-              <GraficoComparacaoVaR dados={dados} corte={corte} />
-              <GraficoDistribuicao dados={dados} corte={corte} />
-              <ViolacoesPorAno dados={dados} corte={corte} />
-              <Aderencia dados={dados} />
-              <GraficoEvolucao dados={dados} corte={corte} />
-            </>
+        {aba === 'fundos' &&
+          (fundo ? (
+            <AnaliseFundo
+              fundo={fundo}
+              periodos={periodos}
+              benchmarks={benchmarks}
+              onAdicionarAoBook={adicionarAoBook}
+              noBook={noBook}
+            />
           ) : (
-            semDados
+            <>
+              <div className="cartao">
+                <h3>Analisar fundos</h3>
+                <p className="legenda">
+                  Busque entre as classes de fundos ativas na CVM por nome, CNPJ, código CVM
+                  ou gestora.
+                </p>
+                <BuscaFundos autoFoco onEscolher={abrirFundo} />
+              </div>
+              <Vazio motivo="A busca cobre as classes em funcionamento normal que reportaram cota nos últimos meses fechados.">
+                Escolha um fundo para ver a análise completa: rentabilidade, risco, drawdown,
+                consistência, patrimônio e composição da carteira.
+              </Vazio>
+            </>
           ))}
 
-        {aba === 'risco' && (dados ? <AbaRiscoRetorno dados={dados} /> : semDados)}
+        {aba === 'book' && (
+          <MeuBook
+            posicoes={posicoes}
+            onMudar={mudarPosicao}
+            onRemover={removerPosicao}
+            onAdicionar={adicionarAoBook}
+            periodos={periodos}
+            benchmarks={benchmarks}
+            onAbrirFundo={abrirFundo}
+            onConsolidar={setResumoBook}
+          />
+        )}
 
-        {aba === 'fundos' && <AbaFundos />}
+        {aba === 'fundos' && fundo && (
+          <div className="troca-fundo">
+            <BuscaFundos
+              onEscolher={abrirFundo}
+              cnpjAtual={fundo.cnpj}
+              rotulo="Analisar outro fundo"
+            />
+          </div>
+        )}
       </main>
 
-      {dados && (
-        <div className="rodape">
-          <span>
-            Preços: yfinance (fechamento ajustado) · taxa livre de risco:{' '}
-            {dados.risco_retorno?.fonte_taxa === 'bcb-sgs-11'
-              ? 'Selic diária, série 11 do BCB'
-              : 'taxa fixa (BCB indisponível)'}
-          </span>
-          <span>
-            {dados.parametros.pregoes} pregões · carteira de{' '}
-            {dados.parametros.valor_carteira.toLocaleString('pt-BR', {
-              style: 'currency',
-              currency: 'BRL',
-              maximumFractionDigits: 0,
-            })}
-          </span>
-        </div>
-      )}
+      <div className="rodape">
+        <span>
+          Fontes: informes diários e cadastro de fundos da CVM (dados abertos), CDI/Selic/IPCA
+          do Banco Central (SGS) e índices de mercado do Yahoo Finance.
+        </span>
+        <span>
+          {status?.ultima_atualizacao
+            ? `CVM atualizada em ${status.ultima_atualizacao}`
+            : 'sem cache da CVM'}{' '}
+          <button
+            type="button"
+            className="btn-texto btn-inline"
+            onClick={atualizar}
+            disabled={atualizando}
+          >
+            {atualizando ? 'atualizando…' : 'atualizar agora'}
+          </button>
+        </span>
+      </div>
     </div>
   )
 }

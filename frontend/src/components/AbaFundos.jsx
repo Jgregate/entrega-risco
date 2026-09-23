@@ -1,325 +1,188 @@
-import { useEffect, useState } from 'react'
-import { analiseFundo, atualizarFundos, buscarFundos, statusFundos, top10Fundos } from '../api'
-import { CORES, num, pct } from '../formato'
-import CartaoGrafico from './CartaoGrafico'
-import GraficoComparativoIndices from './GraficoComparativoIndices'
-import GraficoCrescimentoFundo from './GraficoCrescimentoFundo'
-import GraficoHeatmapMensal from './GraficoHeatmapMensal'
-import GraficoRetornoPorJanela from './GraficoRetornoPorJanela'
-import GraficoSharpeSortinoPorJanela from './GraficoSharpeSortinoPorJanela'
-import { Kpi } from './Kpis'
-
-const JANELAS_MESES = [
-  { meses: 6, texto: '6 meses' },
-  { meses: 12, texto: '1 ano' },
-  { meses: 24, texto: '2 anos' },
-  { meses: 36, texto: '3 anos' },
-]
+import { useCallback, useEffect, useState } from 'react'
+import { atualizarFundos, listarBenchmarks, listarPeriodos, statusFundos } from '../api'
+import '../fundos.css'
+import { carregar, salvar } from '../book'
+import BuscaFundos from './BuscaFundos'
+import VisaoGeral from './VisaoGeral'
+import MeuBook from './book/MeuBook'
+import AnaliseFundo from './fundo/AnaliseFundo'
+import { Erro, Vazio } from './ui'
 
 /**
- * Aba Fundos: busca/ranking de fundos ativos na CVM (equivalente à sidebar
- * do sistema FUNDOS original) + análise do fundo escolhido. Estado próprio,
- * não depende da carteira de ações montada na aba Book.
+ * Aba Fundos: a plataforma de fundos em três áreas — a visão consolidada, a
+ * análise de um fundo e o book do usuário. O estado que atravessa as três é
+ * pequeno de propósito (o fundo aberto e as posições do book) e mora aqui,
+ * para clicar num fundo dentro do book levar direto à análise dele.
+ *
+ * Tudo dentro de `.fundos`: o CSS da plataforma (fundos.css) é escopado nessa
+ * classe para não mexer no visual das abas de VaR.
  */
+const AREAS = [
+  { id: 'geral', titulo: 'Visão Geral', sub: 'book e descoberta' },
+  { id: 'fundos', titulo: 'Analisar Fundos', sub: 'análise individual' },
+  { id: 'book', titulo: 'Meu Book', sub: 'carteira consolidada' },
+]
+
 export default function AbaFundos() {
-  const [modo, setModo] = useState('busca')
+  const [area, setArea] = useState('geral')
+  const [fundo, setFundo] = useState(null)
+  const [posicoes, setPosicoes] = useState(carregar)
 
-  const [query, setQuery] = useState('')
-  const [resultadosBusca, setResultadosBusca] = useState(null)
-  const [buscando, setBuscando] = useState(false)
-
-  const [anosRanking, setAnosRanking] = useState(1)
-  const [top10, setTop10] = useState(null)
-  const [carregandoTop10, setCarregandoTop10] = useState(false)
-
-  const [fundo, setFundo] = useState(null) // { cnpj, nome }
-  const [meses, setMeses] = useState(24)
-  const [dados, setDados] = useState(null)
-  const [carregando, setCarregando] = useState(false)
-  const [erro, setErro] = useState(null)
-
+  const [periodos, setPeriodos] = useState(null)
+  const [benchmarks, setBenchmarks] = useState(null)
   const [status, setStatus] = useState(null)
+  const [erroCatalogo, setErroCatalogo] = useState(null)
   const [atualizando, setAtualizando] = useState(false)
 
+  // resumo da última consolidação, para a Visão Geral não refazer a conta
+  const [resumoBook, setResumoBook] = useState(null)
+
   useEffect(() => {
+    Promise.all([listarPeriodos(), listarBenchmarks()])
+      .then(([p, b]) => {
+        setPeriodos(p)
+        setBenchmarks(b)
+      })
+      .catch((e) => setErroCatalogo(e.message))
     statusFundos().then(setStatus).catch(() => setStatus(null))
   }, [])
 
   useEffect(() => {
-    if (modo !== 'top10') return
-    setCarregandoTop10(true)
-    top10Fundos(anosRanking)
-      .then(setTop10)
-      .catch((e) => setErro(e.message))
-      .finally(() => setCarregandoTop10(false))
-  }, [modo, anosRanking])
+    salvar(posicoes)
+  }, [posicoes])
 
-  useEffect(() => {
-    if (!fundo) return
-    setCarregando(true)
-    setErro(null)
-    analiseFundo(fundo.cnpj, meses)
-      .then(setDados)
-      .catch((e) => {
-        setErro(e.message)
-        setDados(null)
-      })
-      .finally(() => setCarregando(false))
-  }, [fundo, meses])
+  const abrirFundo = useCallback((f) => {
+    setFundo({ cnpj: f.cnpj || f.cnpj_fmt, nome: f.nome })
+    setArea('fundos')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
 
-  const buscar = (e) => {
-    e.preventDefault()
-    if (query.trim().length < 2) return
-    setBuscando(true)
-    setErro(null)
-    buscarFundos(query)
-      .then(setResultadosBusca)
-      .catch((e2) => setErro(e2.message))
-      .finally(() => setBuscando(false))
-  }
+  const adicionarAoBook = useCallback((f) => {
+    const cnpj = f.cnpj || f.cnpj_fmt
+    setPosicoes((atual) =>
+      atual.some((p) => p.cnpj === cnpj) ? atual : [...atual, { cnpj, nome: f.nome }]
+    )
+    setArea('book')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [])
 
-  const escolher = (cnpj, nome) => setFundo({ cnpj, nome })
+  const mudarPosicao = useCallback((indice, campo, valor) => {
+    setPosicoes((atual) => atual.map((p, i) => (i === indice ? { ...p, [campo]: valor } : p)))
+  }, [])
+
+  const removerPosicao = useCallback((indice) => {
+    setPosicoes((atual) => atual.filter((_, i) => i !== indice))
+  }, [])
 
   const atualizar = () => {
     setAtualizando(true)
     atualizarFundos()
-      .then(() => statusFundos())
+      .then(statusFundos)
       .then(setStatus)
-      .then(() => {
-        if (fundo) setFundo({ ...fundo }) // reforça o efeito de análise sem duplicar lógica
-      })
-      .catch((e) => setErro(e.message))
+      .catch(() => {})
       .finally(() => setAtualizando(false))
   }
 
+  const noBook = fundo ? posicoes.some((p) => p.cnpj === fundo.cnpj) : false
+
   return (
-    <>
-      <div className="cartao">
-        <h3>Escolha o fundo</h3>
-        <p className="legenda">
-          Fundos ativos e registrados na CVM (dados.cvm.gov.br), restritos aos que reportaram cota
-          nos dois últimos meses fechados.
-        </p>
-
-        <div className="segmentado">
+    <div className="fundos">
+      <nav className="abas">
+        {AREAS.map((a) => (
           <button
-            className={`chip${modo === 'busca' ? ' ativo' : ''}`}
-            onClick={() => setModo('busca')}
+            key={a.id}
+            type="button"
+            className={`aba${area === a.id ? ' ativa' : ''}`}
+            aria-current={area === a.id ? 'page' : undefined}
+            onClick={() => setArea(a.id)}
           >
-            Buscar por nome
+            <span className="aba-titulo">{a.titulo}</span>
+            <span className="aba-sub">{a.sub}</span>
           </button>
-          <button
-            className={`chip${modo === 'top10' ? ' ativo' : ''}`}
-            onClick={() => setModo('top10')}
-          >
-            Top 10 por retorno
-          </button>
-        </div>
+        ))}
+      </nav>
 
-        {modo === 'busca' ? (
-          <>
-            <form onSubmit={buscar} className="dupla" style={{ gridTemplateColumns: '1fr auto' }}>
-              <input
-                value={query}
-                placeholder="ex.: TREND NASDAQ 100"
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              <button className="btn-principal" style={{ width: 'auto', margin: 0 }} disabled={buscando}>
-                {buscando ? <span className="carregando" /> : 'Buscar'}
-              </button>
-            </form>
+      {erroCatalogo && (
+        <Erro>
+          Não foi possível falar com a API ({erroCatalogo}). Verifique se o backend está rodando
+          em <code>http://127.0.0.1:8000</code>.
+        </Erro>
+      )}
 
-            {resultadosBusca && resultadosBusca.length === 0 && (
-              <p className="aviso-pesos">Nenhum fundo ativo encontrado com esse nome.</p>
-            )}
+      {area === 'geral' && (
+        <VisaoGeral
+          resumoBook={resumoBook}
+          temBook={posicoes.length > 0}
+          onIrParaBook={() => setArea('book')}
+          onEscolherFundo={abrirFundo}
+          status={status}
+        />
+      )}
 
-            {resultadosBusca && resultadosBusca.length > 0 && (
-              <table style={{ marginTop: 14 }}>
-                <tbody>
-                  {resultadosBusca.map((f) => (
-                    <tr key={f.cnpj} onClick={() => escolher(f.cnpj, f.nome)} style={{ cursor: 'pointer' }}>
-                      <td style={fundo?.cnpj === f.cnpj ? { color: CORES.vermelhoClaro, fontWeight: 500 } : undefined}>
-                        {f.nome}
-                      </td>
-                      <td className="num" style={{ color: 'var(--texto-fraco)' }}>
-                        {f.cnpj}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </>
+      {area === 'fundos' &&
+        (fundo ? (
+          <AnaliseFundo
+            fundo={fundo}
+            periodos={periodos}
+            benchmarks={benchmarks}
+            onAdicionarAoBook={adicionarAoBook}
+            noBook={noBook}
+          />
         ) : (
           <>
-            <div className="segmentado">
-              {[1, 2, 3].map((a) => (
-                <button
-                  key={a}
-                  className={`chip${anosRanking === a ? ' ativo' : ''}`}
-                  onClick={() => setAnosRanking(a)}
-                >
-                  {a} ano{a > 1 ? 's' : ''}
-                </button>
-              ))}
+            <div className="cartao">
+              <h3>Analisar fundos</h3>
+              <p className="legenda">
+                Busque entre as classes de fundos ativas na CVM por nome, CNPJ, código CVM ou
+                gestora.
+              </p>
+              <BuscaFundos autoFoco onEscolher={abrirFundo} />
             </div>
-
-            {carregandoTop10 && <p className="aviso-pesos">Calculando ranking…</p>}
-
-            {top10 && top10.length === 0 && !carregandoTop10 && (
-              <p className="aviso-pesos">Não foi possível montar o ranking para essa janela.</p>
-            )}
-
-            {top10 && top10.length > 0 && (
-              <table style={{ marginTop: 8 }}>
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Fundo</th>
-                    <th style={{ textAlign: 'right' }}>Retorno</th>
-                    <th style={{ textAlign: 'right' }}>Patrimônio (R$ mi)</th>
-                    <th style={{ textAlign: 'right' }}>Cotistas</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {top10.map((f, i) => (
-                    <tr key={f.cnpj} onClick={() => escolher(f.cnpj, f.nome)} style={{ cursor: 'pointer' }}>
-                      <td>{i + 1}</td>
-                      <td style={fundo?.cnpj === f.cnpj ? { color: CORES.vermelhoClaro, fontWeight: 500 } : undefined}>
-                        {f.nome}
-                      </td>
-                      <td className="num">{pct(f['retorno_%'] / 100, 1)}</td>
-                      <td className="num">{num(f.patrimonio_mi, 1)}</td>
-                      <td className="num">{num(f.cotistas, 0)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <p className="aviso-pesos">
-              Entre fundos com pelo menos 100 cotistas (exclui exclusivos/institucionais) e sem
-              saltos mensais suspeitos (proxy de desdobramento/erro de reporte, não performance
-              real).
-            </p>
+            <Vazio motivo="A busca cobre as classes em funcionamento normal que reportaram cota nos últimos meses fechados.">
+              Escolha um fundo para ver a análise completa: rentabilidade, risco, drawdown,
+              consistência, patrimônio e composição da carteira.
+            </Vazio>
           </>
-        )}
+        ))}
 
-        <div className="separador" />
-        <p className="aviso-pesos">
-          {status?.ultima_atualizacao
-            ? `Dados do mês mais recente baixados em: ${status.ultima_atualizacao}`
-            : 'Ainda sem dados do mês mais recente em cache.'}{' '}
-          <button className="btn-texto" style={{ width: 'auto', display: 'inline-block', padding: '2px 10px' }} onClick={atualizar} disabled={atualizando}>
-            {atualizando ? 'atualizando…' : '🔄 atualizar dados agora'}
-          </button>
-        </p>
-      </div>
+      {area === 'book' && (
+        <MeuBook
+          posicoes={posicoes}
+          onMudar={mudarPosicao}
+          onRemover={removerPosicao}
+          onAdicionar={adicionarAoBook}
+          periodos={periodos}
+          benchmarks={benchmarks}
+          onAbrirFundo={abrirFundo}
+          onConsolidar={setResumoBook}
+        />
+      )}
 
-      {erro && <div className="erro">{erro}</div>}
-
-      {!fundo && !erro && (
-        <div className="vazio">
-          Busque um fundo pelo nome ou veja o Top 10 para escolher um.
+      {area === 'fundos' && fundo && (
+        <div className="troca-fundo">
+          <BuscaFundos onEscolher={abrirFundo} cnpjAtual={fundo.cnpj} rotulo="Analisar outro fundo" />
         </div>
       )}
 
-      {fundo && (
-        <>
-          <div className="titulo-secao">
-            <h3>{fundo.nome}</h3>
-            <p className="legenda">CNPJ {fundo.cnpj}</p>
-          </div>
-
-          {carregando && <p className="aviso-pesos">Carregando análise…</p>}
-
-          {dados && (
-            <>
-              <div className="segmentado" style={{ marginBottom: 16 }}>
-                {JANELAS_MESES.map((j) => (
-                  <button
-                    key={j.meses}
-                    className={`chip${meses === j.meses ? ' ativo' : ''}`}
-                    onClick={() => setMeses(j.meses)}
-                  >
-                    {j.texto}
-                  </button>
-                ))}
-              </div>
-
-              <div className="kpis">
-                <Kpi
-                  rotulo={`Retorno acumulado (${dados.resumo.janela_meses}m)`}
-                  valor={pct(dados.resumo['retorno_acumulado_%'] / 100, 1)}
-                  cor={CORES.vermelhoClaro}
-                  destaque
-                  nota={`CDI no período: ${pct(dados.resumo['retorno_cdi_%'] / 100, 1)}`}
-                />
-                <Kpi
-                  rotulo="Volatilidade anualizada"
-                  valor={pct(dados.resumo['volatilidade_anualizada_%'] / 100, 1)}
-                />
-                <Kpi
-                  rotulo="Sharpe · Sortino"
-                  valor={`${num(dados.resumo.sharpe)} · ${num(dados.resumo.sortino)}`}
-                  nota="excesso sobre o CDI"
-                />
-              </div>
-
-              {dados.meses_disponiveis < meses && (
-                <p className="aviso-pesos">
-                  Esse fundo só tem {dados.meses_disponiveis} mês(es) fechado(s) de histórico
-                  disponível — usando todos.
-                </p>
-              )}
-
-              <div className="duo">
-                <GraficoCrescimentoFundo dados={dados} />
-                <GraficoHeatmapMensal dados={dados} />
-              </div>
-
-              {dados.comparativo_disponivel ? (
-                <GraficoComparativoIndices dados={dados} />
-              ) : (
-                <div className="vazio">
-                  Aumente a janela para pelo menos 12 meses para ver o comparativo com Ibovespa.
-                </div>
-              )}
-
-              <div className="duo">
-                <GraficoRetornoPorJanela dados={dados} />
-                <GraficoSharpeSortinoPorJanela dados={dados} />
-              </div>
-
-              <CartaoGrafico titulo="Retornos mensais">
-                {() => (
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Mês</th>
-                        <th style={{ textAlign: 'right' }}>Fundo</th>
-                        <th style={{ textAlign: 'right' }}>CDI</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dados.serie_mensal.map((p) => (
-                        <tr key={`${p.ano}-${p.mes}`}>
-                          <td>
-                            {String(p.mes).padStart(2, '0')}/{p.ano}
-                          </td>
-                          <td className={`num ${p['fundo_%'] < 0 ? 'perda' : 'ganho'}`}>
-                            {pct(p['fundo_%'] / 100, 2)}
-                          </td>
-                          <td className="num">{pct(p['cdi_%'] / 100, 2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </CartaoGrafico>
-            </>
-          )}
-        </>
-      )}
-    </>
+      <div className="rodape">
+        <span>
+          Fontes: informes diários e cadastro de fundos da CVM (dados abertos), CDI/Selic/IPCA do
+          Banco Central (SGS) e índices de mercado do Yahoo Finance.
+        </span>
+        <span>
+          {status?.ultima_atualizacao
+            ? `CVM atualizada em ${status.ultima_atualizacao}`
+            : 'sem cache da CVM'}{' '}
+          <button
+            type="button"
+            className="btn-texto btn-inline"
+            onClick={atualizar}
+            disabled={atualizando}
+          >
+            {atualizando ? 'atualizando…' : 'atualizar agora'}
+          </button>
+        </span>
+      </div>
+    </div>
   )
 }

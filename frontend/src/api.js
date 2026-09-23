@@ -1,23 +1,42 @@
 const BASE = import.meta.env.VITE_API_URL || ''
 
+// O proxy do Vite responde 500 com corpo não-JSON quando não consegue falar com
+// o FastAPI. Sem esta mensagem, backend fora do ar e falha real de cálculo
+// aparecem exatamente iguais na tela — os dois viravam "Erro 500".
+const BACKEND_FORA =
+  'Não foi possível falar com o backend. Confira se ele está rodando: ' +
+  'no diretório backend/, rode .venv\\Scripts\\python.exe -m uvicorn app.main:app --reload'
+
 async function trata(resp) {
   if (!resp.ok) {
     let detalhe = `Erro ${resp.status}`
+    let temJson = false
     try {
       const json = await resp.json()
+      temJson = true
       if (typeof json.detail === 'string') detalhe = json.detail
       else if (Array.isArray(json.detail)) detalhe = json.detail.map((d) => d.msg).join(' · ')
     } catch {
       /* resposta sem corpo JSON */
     }
+    if (!temJson && resp.status >= 500) detalhe = BACKEND_FORA
     throw new Error(detalhe)
   }
   return resp.json()
 }
 
+/** `fetch` só rejeita em falha de rede — ali não há status para interpretar. */
+async function buscar(rota, opcoes) {
+  try {
+    return await fetch(`${BASE}${rota}`, opcoes)
+  } catch {
+    throw new Error(BACKEND_FORA)
+  }
+}
+
 async function post(rota, corpo) {
   return trata(
-    await fetch(`${BASE}${rota}`, {
+    await buscar(rota, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(corpo),
@@ -26,7 +45,7 @@ async function post(rota, corpo) {
 }
 
 async function get(rota) {
-  return trata(await fetch(`${BASE}${rota}`))
+  return trata(await buscar(rota))
 }
 
 /** Payload completo: os três VaRs, o book e a relação risco-retorno. */
